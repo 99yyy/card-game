@@ -150,6 +150,8 @@ var _btn_believe: Button
 var _btn_doubt: Button
 var _btn_passon: Button
 var _passon_mode := false
+var _dice_row_sig := ""
+var _poison_tgt_sig := ""
 
 
 func _ready() -> void:
@@ -539,7 +541,9 @@ func _build_intro() -> void:
 	title.set_anchors_preset(Control.PRESET_FULL_RECT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	title.modulate = Color(1, 0.88, 0.55)
+	title.modulate = Color(0.16, 0.1, 0.06)      # 匾心是浅石面，用深墨色才压得住
+	title.add_theme_color_override("font_outline_color", Color(0.85, 0.7, 0.4, 0.55))
+	title.add_theme_constant_override("outline_size", 3)
 	banner_wrap.add_child(title)
 	var bwc := CenterContainer.new()
 	bwc.add_child(banner_wrap)
@@ -550,6 +554,7 @@ func _build_intro() -> void:
 	subtitle.modulate = Color(0.8, 0.78, 0.7)
 
 	var rt := RichTextLabel.new()
+	rt.name = "RulesText"
 	rt.bbcode_enabled = true
 	rt.fit_content = true
 	rt.custom_minimum_size = Vector2(760, 0)
@@ -1009,6 +1014,18 @@ func _on_event_popped(e: Dictionary) -> void:
 			_reveal_pid = e.pid
 			if not online:
 				_maybe_bot_emote(e)
+		"DICE_REVEALED":
+			if not online:
+				var bp := int(_view.get("bid_by", -1))
+				if bp >= 0 and bp < _view.players.size() and bool(_view.players[bp].is_bot) \
+						and _ui_rng.randf() < 0.5:
+					_apply(Action.emote(bp, 0 if bool(e.stands) else 3))
+		"OFFER_REVEALED":
+			if not online:
+				var eid := int(e.eater)
+				if eid < _view.players.size() and bool(_view.players[eid].is_bot) \
+						and _ui_rng.randf() < 0.5:
+					_apply(Action.emote(eid, 3))
 		"RETREAT":
 			_flash(Color(0.9, 0.1, 0.1), 0.22)
 			_punch(int(e.pid))
@@ -1401,7 +1418,8 @@ func _build_panels(n: int, me: int) -> void:
 
 func _phase_limit() -> float:
 	match int(gs.phase):
-		Rules.Phase.SKILL_PICK: return Rules.SKILL_PICK_SEC
+		Rules.Phase.SKILL_PICK:
+			return 10.0 if game_mode >= Rules.Mode.ANQI else Rules.SKILL_PICK_SEC
 		Rules.Phase.SWAP_WINDOW: return Rules.SWAP_WINDOW_SEC
 	return Rules.PLAY_TIMEOUT_SEC
 
@@ -1922,6 +1940,9 @@ func _on_mode_pick(mi: int) -> void:
 	var d := _intro_modal.find_child("ModeDesc", true, false)
 	if d != null:
 		d.text = Rules.MODE_DESCS[mi]
+	var rtn := _intro_modal.find_child("RulesText", true, false)
+	if rtn != null:
+		rtn.text = _mode_rules_text(mi)
 
 
 func _on_lobby_mode(mi: int) -> void:
@@ -2128,7 +2149,9 @@ func _on_offer() -> void:
 
 func _on_passon_toggle() -> void:
 	_passon_mode = true
+	_poison_tgt_sig = "pass:%s" % str(_view.get("offer_seen", []))
 	_refresh_poison_targets(true)
+	_poison_target = -1
 	_narration.text = "转赠：选个声称和一个没看过的人"
 
 
@@ -2226,8 +2249,9 @@ func _refresh_bottom_dice() -> void:
 	_emote_bar.visible = _bottom_zone.visible
 	# 我的骰盅
 	var mine: Array = _view.you.get("dice", [])
-	if _dice_row.get_child_count() != mine.size() or _stage_sig != "dice_r%d" % _view.round_number:
-		_stage_sig = "dice_r%d" % _view.round_number
+	var drs := "r%d_n%d" % [_view.round_number, mine.size()]
+	if _dice_row_sig != drs:
+		_dice_row_sig = drs
 		for c in _dice_row.get_children():
 			c.free()
 		for d in mine:
@@ -2272,11 +2296,15 @@ func _refresh_bottom_poison() -> void:
 	_skill_button.visible = false
 	if offering:
 		_btn_offer.visible = not _passon_mode
+		_btn_offer.text = "递出"
 		_btn_believe.visible = false
 		_btn_doubt.visible = false
 		_btn_passon.visible = false
-		if _poison_target_box.get_child_count() == 0:
+		var tsig := "offer:%d:%d" % [int(_view.round_number), int(_view.alive_count)]
+		if _poison_tgt_sig != tsig:
+			_poison_tgt_sig = tsig
 			_refresh_poison_targets(false)
+			_poison_target = -1
 	elif receiving:
 		var can_pass := false
 		for a in _view.legal_actions:
@@ -2287,3 +2315,51 @@ func _refresh_bottom_poison() -> void:
 		_btn_believe.visible = not _passon_mode
 		_btn_doubt.visible = not _passon_mode
 		_btn_passon.visible = can_pass and not _passon_mode
+
+
+# 各模式的开场讲解（点玩法按钮即切换；对局中的「？玩法」同样生效）
+func _mode_rules_text(mi: int) -> String:
+	match mi:
+		Rules.Mode.XINMO:
+			return """[b][color=#e8c08c]怎么玩(心魔·论招变体)[/color][/b]
+[color=#e8c08c]①[/color] 规则与「论招」完全相同:定路数、盖牌虚报、拆招定生死、退步踏虚石。
+[color=#e8c08c]②[/color] 唯一区别:牌堆里混入[b][color=#c46ae0]一张心魔[/color][/b](顶替一张化劲)。
+　　心魔[b]只能单张打出[/b],且[b]永远算真牌[/b]——拆它的人必定冤枉。
+[color=#e8c08c]③[/color] 但拆开心魔的代价:[color=#ff9a7a]除出牌者外,全场每人各退一步![/color]
+[color=#e8c08c]④[/color] 握着心魔的人巴不得被拆;全场都得记着——心魔现身了没有。
+　　中后期,"他只押了一张"就是最恐怖的信号。
+
+[b][color=#e8c08c]盘外招[/color][/b]　与论招相同:开局自选皮囊与技能(可重复),全场公开。"""
+		Rules.Mode.ANQI:
+			return """[b][color=#e8c08c]怎么玩(暗器)[/color][/b]
+[color=#e8c08c]①[/color] 每人一只暗器囊,内藏[b]5枚暗器[/b],只有自己看得见。
+　　六种:飞刀、柳叶镖、毒针、铁蒺藜、袖箭,以及[b]无影针[/b]——百搭,算任何一种。
+[color=#e8c08c]②[/color] 轮流[b]叫价[/b]:"全场至少有N枚X。" 每次必须[b]加码[/b](枚数更多,或同枚数兵器更靠后)。
+[color=#e8c08c]③[/color] 轮到你,二选一:继续加码,或对上家喝一声[b]拆招[/b]——全场开囊清点(无影针计入):
+　　叫价成立 → [color=#ff9a7a]拆招者退一步[/color];吹破了 → [color=#ff9a7a]叫价者退一步[/color]。
+[color=#e8c08c]④[/color] [b]每退一步,下一局你的囊里少一枚[/b]——信息越少,越要靠读人。
+[color=#e8c08c]⑤[/color] 石板与虚石同论招:退到虚石坠崖,最后站着的人赢。
+
+[b][color=#e8c08c]心法[/color][/b]　全场共谋吹一个越来越大的牛皮,看谁先绷不住。"""
+		Rules.Mode.DIDU:
+			return """[b][color=#e8c08c]怎么玩(递毒·五毒局)[/color][/b]
+[color=#e8c08c]①[/color] 五毒各8张(蛇、蝎、蜈蚣、蟾蜍、蜘蛛),全部发到各人手中。
+[color=#e8c08c]②[/color] 出手人盖一张递给[b]指定的人[/b],声称:"这是蝎。"([color=#ff9a7a]可以撒谎[/color])
+[color=#e8c08c]③[/color] 收礼人三选一:
+　　[b]信了[/b] / [b]不信[/b] —— 开盒验证:判对 → 出手人吃下;判错 → 自己吃下。
+　　[b]转赠[/b] —— 自己偷看一眼,换个声称,递给[b]还没看过的人[/b]。祸水东引。
+[color=#e8c08c]④[/color] 吃下的毒全场可见。[b]同一种毒集满4只 → 毒发出局[/b]。
+[color=#e8c08c]⑤[/color] 最后一个没毒发的人赢。
+
+[b][color=#e8c08c]心法[/color][/b]　递给谁,本身就是宣战。全场都看得见谁快毒发——围剿与反围剿。"""
+	return """[b][color=#e8c08c]怎么玩[/color][/b]
+[color=#e8c08c]①[/color] 每轮定一个[b]路数[/b](刀/剑/掌),每人发5张招式牌。
+[color=#e8c08c]②[/color] 轮到你,二选一:
+　　[b]出招[/b] —— 盖着打出1~3张,宣称"皆是本轮路数"。[color=#ff9a7a]可以撒谎。[/color](化劲是百搭,算任何路数)
+　　[b]拆招[/b] —— 掀开[b]上家[/b]刚打出的牌:他真在撒谎 → [color=#ff9a7a]他退一步[/color];牌是真的 → [color=#ff9a7a]你冤枉了人,你退一步[/color]。
+　　若其他人手牌都已出尽,你打出的每一手都会[b]自动亮招[/b]——[color=#ff9a7a]谎言无处可藏[/color]。
+[color=#e8c08c]③[/color] 每人背后六块石板,[b]其中一块是虚的[/b],位置无人知晓。退到虚石 → 坠崖出局。退得越多越危险(1/6 → 1/5 → … → 必坠)。
+[color=#e8c08c]④[/color] 最后还站在崖顶的人赢。
+
+[b][color=#e8c08c]盘外招[/color][/b]　开局自选皮囊与技能(技能可与他人重复),全场公开:
+金钟罩·免死一次　听劲·偷看上家一张　藏拙·读条造假　后发制人·冤枉我者多退一步　改弦·改路数　辨虚实·探一块石板"""
