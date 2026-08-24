@@ -98,6 +98,10 @@ var _skill_modal: CenterContainer
 var _skill_pick_label: Label
 var _skill_desc_label: Label
 var _swap_modal: CenterContainer
+var _probe_modal: CenterContainer      # 辨虚实：选石板
+var _probe_row: HBoxContainer
+var _listen_modal: CenterContainer     # 听劲：选看哪张
+var _listen_row: HBoxContainer
 var _over_modal: CenterContainer
 var _game_over_label: Label
 var _restart_button: Button
@@ -124,6 +128,7 @@ func _ready() -> void:
 	_build_ui()
 	_build_intro()
 	_build_lobby()
+	_build_skill_target_modals()
 	# 先看玩法介绍，点「开始对局」才发牌（用户反馈：需要开场白）
 	for n in _hud_nodes:
 		n.visible = false
@@ -881,10 +886,12 @@ func _on_skill() -> void:
 	match you.skill:
 		Rules.Skill.TINGJIN:
 			if _view.last_player_who_played != -1 and _view.last_played_count > 0:
-				_apply(Action.use_tingjin(my_id, 0))
+				if _view.last_played_count == 1:
+					_apply(Action.use_tingjin(my_id, 0))   # 只有一张，没得选
+				else:
+					_show_listen_modal()                    # 规则 §3.3②：挑一张看
 		Rules.Skill.BIANXUSHI:
-			if you.steps_taken < Rules.STONES:
-				_apply(Action.use_bianxushi(my_id, you.steps_taken + 1))
+			_show_probe_modal()                             # 规则 §3.3⑥：任选未踏过的石板
 		_:
 			pass
 
@@ -1035,6 +1042,9 @@ func _refresh() -> void:
 			_skill_button.text = Rules.SKILL_NAMES[sk] if sk != Rules.Skill.NONE else "技能"
 
 	# 弹层
+	if gs.phase != Rules.Phase.PLAY or int(_view.current_player) != my_id:
+		_probe_modal.visible = false
+		_listen_modal.visible = false
 	var picking: bool = gs.phase == Rules.Phase.SKILL_PICK \
 		and _view.you.pending_skill_pick == Rules.Skill.NONE and _view.you.alive
 	_set_modal(_skill_modal, picking)
@@ -1445,3 +1455,156 @@ func _send_start() -> void:
 
 func _copy_room_code() -> void:
 	DisplayServer.clipboard_set(_lobby_code_label.text)
+
+
+# ============================================================
+# 技能目标选择弹层（辨虚实选石板 / 听劲选牌）
+# ============================================================
+
+func _build_skill_target_modals() -> void:
+	# 辨虚实
+	_probe_modal = CenterContainer.new()
+	_probe_modal.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_probe_modal.visible = false
+	add_child(_probe_modal)
+	var pp := PanelContainer.new()
+	pp.add_theme_stylebox_override("panel", _flat_style(Color(0.04, 0.05, 0.08, 0.95), 12, 24, 18))
+	_probe_modal.add_child(pp)
+	var pv := VBoxContainer.new()
+	pv.add_theme_constant_override("separation", 12)
+	pp.add_child(pv)
+	var pt := _mk_label(pv, 20)
+	pt.text = "辨虚实 —— 探查自己身后哪块石板？"
+	pt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var ph := _mk_label(pv, 13)
+	ph.text = "已踏过的不能选；结果只有你自己知道（×1）"
+	ph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ph.modulate = Color(0.8, 0.78, 0.68)
+	_probe_row = HBoxContainer.new()
+	_probe_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_probe_row.add_theme_constant_override("separation", 10)
+	pv.add_child(_probe_row)
+	var pcancel := Button.new()
+	pcancel.text = "再想想"
+	pcancel.focus_mode = Control.FOCUS_NONE
+	pcancel.pressed.connect(func(): _probe_modal.visible = false)
+	var pcc := CenterContainer.new()
+	pcc.add_child(pcancel)
+	pv.add_child(pcc)
+
+	# 听劲
+	_listen_modal = CenterContainer.new()
+	_listen_modal.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_listen_modal.visible = false
+	add_child(_listen_modal)
+	var lp := PanelContainer.new()
+	lp.add_theme_stylebox_override("panel", _flat_style(Color(0.04, 0.05, 0.08, 0.95), 12, 24, 18))
+	_listen_modal.add_child(lp)
+	var lv := VBoxContainer.new()
+	lv.add_theme_constant_override("separation", 12)
+	lp.add_child(lv)
+	var lt := _mk_label(lv, 20)
+	lt.text = "听劲 —— 窥探上家哪一张？"
+	lt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var lh := _mk_label(lv, 13)
+	lh.text = "全场只知道你看了，不知道你看到什么"
+	lh.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lh.modulate = Color(0.8, 0.78, 0.68)
+	_listen_row = HBoxContainer.new()
+	_listen_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_listen_row.add_theme_constant_override("separation", 10)
+	lv.add_child(_listen_row)
+	var lcancel := Button.new()
+	lcancel.text = "再想想"
+	lcancel.focus_mode = Control.FOCUS_NONE
+	lcancel.pressed.connect(func(): _listen_modal.visible = false)
+	var lcc := CenterContainer.new()
+	lcc.add_child(lcancel)
+	lv.add_child(lcc)
+
+
+func _show_probe_modal() -> void:
+	for c in _probe_row.get_children():
+		c.free()
+	var stepped: int = _view.you.steps_taken
+	var probed: Dictionary = _view.you.probe_result
+	for st in range(1, Rules.STONES + 1):
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(72, 84)
+		b.focus_mode = Control.FOCUS_NONE
+		b.disabled = st <= stepped or probed.has(str(st))
+		b.pressed.connect(_on_probe_pick.bind(st))
+		var bv := VBoxContainer.new()
+		bv.set_anchors_preset(Control.PRESET_FULL_RECT)
+		bv.alignment = BoxContainer.ALIGNMENT_CENTER
+		bv.add_theme_constant_override("separation", 4)
+		bv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(bv)
+		var tr := TextureRect.new()
+		tr.custom_minimum_size = Vector2(48, 32)
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var tex: Texture2D = Art.stone_ok_tex()
+		if tex != null:
+			tr.texture = tex
+		if b.disabled:
+			tr.modulate = Color(0.4, 0.4, 0.4)
+		var tc := CenterContainer.new()
+		tc.add_child(tr)
+		bv.add_child(tc)
+		var nl := Label.new()
+		var mark := ""
+		if probed.has(str(st)):
+			mark = "（虚!）" if bool(probed[str(st)]) else "（实）"
+		elif st <= stepped:
+			mark = "（已踏）"
+		nl.text = "第%d块%s" % [st, mark]
+		nl.add_theme_font_size_override("font_size", 12)
+		nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bv.add_child(nl)
+		_probe_row.add_child(b)
+	_set_modal(_probe_modal, true)
+
+
+func _on_probe_pick(stone: int) -> void:
+	_probe_modal.visible = false
+	_apply(Action.use_bianxushi(my_id, stone))
+
+
+func _show_listen_modal() -> void:
+	for c in _listen_row.get_children():
+		c.free()
+	var back: Texture2D = Art.card_back_tex()
+	for pos in _view.last_played_count:
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(80, 130)
+		b.flat = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(_on_listen_pick.bind(pos))
+		var bv := VBoxContainer.new()
+		bv.set_anchors_preset(Control.PRESET_FULL_RECT)
+		bv.alignment = BoxContainer.ALIGNMENT_CENTER
+		bv.add_theme_constant_override("separation", 4)
+		bv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(bv)
+		var tr := TextureRect.new()
+		tr.custom_minimum_size = Vector2(64, 96)
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if back != null:
+			tr.texture = back
+		var tc := CenterContainer.new()
+		tc.add_child(tr)
+		bv.add_child(tc)
+		var nl := Label.new()
+		nl.text = "第 %d 张" % (pos + 1)
+		nl.add_theme_font_size_override("font_size", 12)
+		nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bv.add_child(nl)
+		_listen_row.add_child(b)
+	_set_modal(_listen_modal, true)
+
+
+func _on_listen_pick(pos: int) -> void:
+	_listen_modal.visible = false
+	_apply(Action.use_tingjin(my_id, pos))
