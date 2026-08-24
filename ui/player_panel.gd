@@ -40,11 +40,24 @@ func _ready() -> void:
 	h.add_theme_constant_override("separation", 8)
 	add_child(h)
 
+	var holder := Control.new()
+	holder.custom_minimum_size = PORTRAIT_SIZE
+	h.add_child(holder)
 	_avatar = TextureRect.new()
 	_avatar.custom_minimum_size = PORTRAIT_SIZE
+	_avatar.size = PORTRAIT_SIZE
 	_avatar.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_avatar.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	h.add_child(_avatar)
+	_avatar.pivot_offset = PORTRAIT_SIZE / 2.0
+	holder.add_child(_avatar)
+	# 待机呼吸：轻微起伏 + 极小摆动，相位随机避免全场同步机械感
+	var phase := randf() * 1.2
+	var idle := _avatar.create_tween().set_loops()
+	idle.tween_interval(phase)
+	idle.tween_property(_avatar, "position:y", -2.0, 0.9 + randf() * 0.4) \
+		.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	idle.tween_property(_avatar, "position:y", 0.0, 0.9 + randf() * 0.4) \
+		.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 3)
@@ -111,6 +124,41 @@ func flash_emote(text: String) -> void:
 	var tw := _emote_label.create_tween()
 	tw.tween_property(_emote_label, "scale", Vector2.ONE, 0.22) \
 		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+
+
+# 事件反应动画（table 在事件弹出时调用）
+func react(kind: String) -> void:
+	match kind:
+		"play":     # 出招：向前探身一顿
+			var tw := _avatar.create_tween()
+			tw.tween_property(_avatar, "position:x", 7.0, 0.09).set_ease(Tween.EASE_OUT)
+			tw.tween_property(_avatar, "position:x", 0.0, 0.22).set_ease(Tween.EASE_IN_OUT)
+		"challenge":  # 拆招断喝：猛地前倾 + 放大
+			var tw2 := _avatar.create_tween().set_parallel(true)
+			tw2.tween_property(_avatar, "scale", Vector2(1.12, 1.12), 0.1).set_ease(Tween.EASE_OUT)
+			tw2.tween_property(_avatar, "position:x", 9.0, 0.1)
+			tw2.chain().tween_property(_avatar, "scale", Vector2.ONE, 0.25)
+			tw2.parallel().tween_property(_avatar, "position:x", 0.0, 0.25)
+		"flinch":   # 被拆/被指认：缩一下再回弹
+			var tw3 := _avatar.create_tween()
+			tw3.tween_property(_avatar, "scale", Vector2(0.9, 0.9), 0.08)
+			tw3.tween_property(_avatar, "scale", Vector2.ONE, 0.3) \
+				.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+		"retreat":  # 退步：向后一跳
+			var tw4 := _avatar.create_tween()
+			tw4.tween_property(_avatar, "position:x", -10.0, 0.12).set_ease(Tween.EASE_OUT)
+			tw4.tween_property(_avatar, "position:y", -6.0, 0.08)
+			tw4.tween_property(_avatar, "position:y", 0.0, 0.1)
+			tw4.tween_property(_avatar, "position:x", 0.0, 0.3)
+		"fall":     # 坠崖：旋转跌出面板
+			var tw5 := _avatar.create_tween().set_parallel(true)
+			tw5.tween_property(_avatar, "rotation", 0.9, 0.7).set_ease(Tween.EASE_IN)
+			tw5.tween_property(_avatar, "position:y", 70.0, 0.7).set_ease(Tween.EASE_IN)
+			tw5.tween_property(_avatar, "modulate:a", 0.25, 0.7)
+		"bell":     # 金钟罩：金光一闪
+			var tw6 := _avatar.create_tween()
+			tw6.tween_property(_avatar, "modulate", Color(1.8, 1.5, 0.7), 0.12)
+			tw6.tween_property(_avatar, "modulate", Color(1, 1, 1), 0.5)
 
 
 # 坠崖时的摇晃演出（table 在 FALL 事件时调用）

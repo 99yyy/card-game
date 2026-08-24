@@ -778,6 +778,12 @@ func _apply_events(events: Array) -> void:
 
 
 # 演出：全屏闪光 + 玩家面板弹跳
+func _react(pid: int, kind: String) -> void:
+	var panel: Control = _my_panel if pid == my_id else _opp_panels.get(pid)
+	if panel != null and panel.has_method("react"):
+		panel.react(kind)
+
+
 func _flash(col: Color, a: float) -> void:
 	_flash_rect.color = Color(col.r, col.g, col.b, a)
 	var tw := create_tween()
@@ -849,6 +855,13 @@ func _on_event_popped(e: Dictionary) -> void:
 		"ROUND_START":
 			_reveal_cards = []
 			_reveal_pid = -1
+		"PLAYED":
+			_react(int(e.pid), "play")
+		"CHALLENGED":
+			_react(int(e.by), "challenge")
+			_react(int(e.target), "flinch")
+		"HEAVEN_CHECK":
+			_react(int(e.pid), "flinch")
 		"REVEALED":
 			_reveal_cards = e.cards.duplicate()
 			_reveal_honest = e.honest
@@ -856,15 +869,18 @@ func _on_event_popped(e: Dictionary) -> void:
 		"RETREAT":
 			_flash(Color(0.9, 0.1, 0.1), 0.22)
 			_punch(int(e.pid))
+			_react(int(e.pid), "retreat")
 		"FALL":
 			_flash(Color(0.75, 0.0, 0.0), 0.45)
 			_punch(int(e.pid))
 			var fp: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
 			if fp != null and fp.has_method("shake"):
 				fp.shake()
+			_react(int(e.pid), "fall")
 		"GOLDEN_BELL":
 			_flash(Color(1.0, 0.82, 0.3), 0.35)
 			_punch(int(e.pid))
+			_react(int(e.pid), "bell")
 		"HOUFA_TRIGGERED":
 			_flash(Color(0.4, 0.5, 1.0), 0.25)
 		"EMOTE":
