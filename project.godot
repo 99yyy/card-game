@@ -14,6 +14,13 @@ config/name="绝顶"
 run/main_scene="res://ui/table.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
+[gui]
+
+theme/custom_font="res://assets/fonts/fusion-pixel-12px-proportional-zh_hans.otf"
+theme/default_font_antialiasing=0
+theme/default_font_hinting=0
+theme/default_font_subpixel_positioning=0
+
 [display]
 
 window/size/viewport_width=1280
