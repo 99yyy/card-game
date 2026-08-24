@@ -19,6 +19,13 @@ var _emote_left := 0.0
 var _was_current := false
 var _sb_normal: StyleBoxFlat
 var _sb_current: StyleBoxFlat
+var _idle_tween: Tween
+var _frames: Array = []
+var _frames_pid := -1
+var _frame_i := 0
+var _frame_dir := 1
+var _frame_t := 0.0
+const FRAME_DT := 0.13
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(236, 0)
@@ -52,7 +59,8 @@ func _ready() -> void:
 	holder.add_child(_avatar)
 	# 待机呼吸：轻微起伏 + 极小摆动，相位随机避免全场同步机械感
 	var phase := randf() * 1.2
-	var idle := _avatar.create_tween().set_loops()
+	_idle_tween = _avatar.create_tween().set_loops()
+	var idle := _idle_tween
 	idle.tween_interval(phase)
 	idle.tween_property(_avatar, "position:y", -2.0, 0.9 + randf() * 0.4) \
 		.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
@@ -115,6 +123,19 @@ func _process(delta: float) -> void:
 		_emote_left -= delta
 		if _emote_left <= 0.0:
 			_emote_label.visible = false
+	# 待机帧动画：乒乓播放（0..8..0），首尾无缝
+	if _frames.size() > 1:
+		_frame_t += delta
+		if _frame_t >= FRAME_DT:
+			_frame_t = 0.0
+			_frame_i += _frame_dir
+			if _frame_i >= _frames.size() - 1:
+				_frame_i = _frames.size() - 1
+				_frame_dir = -1
+			elif _frame_i <= 0:
+				_frame_i = 0
+				_frame_dir = 1
+			_avatar.texture = _frames[_frame_i]
 
 func flash_emote(text: String) -> void:
 	_emote_label.text = "「" + text + "」"
@@ -171,9 +192,15 @@ func shake() -> void:
 	tw.tween_property(self, "rotation", 0.0, 0.10)
 
 func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
-	var tex: Texture2D = Art.char_tex(d.id)
-	if tex != null:
-		_avatar.texture = tex
+	if _frames_pid != int(d.id):
+		_frames_pid = int(d.id)
+		_frames = Art.char_frames(_frames_pid)
+		_frame_i = 0
+		_frame_dir = 1
+		if not _frames.is_empty():
+			_avatar.texture = _frames[0]
+		if _frames.size() > 1 and _idle_tween != null:
+			_idle_tween.kill()          # 有真帧动画就停掉位移呼吸，避免双重晃动
 
 	var thinking: bool = d.get("thinking", false)
 	var nm: String = d.name

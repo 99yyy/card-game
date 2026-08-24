@@ -22,6 +22,25 @@ static func char_tex(pid: int) -> Texture2D:
 	var idx: int = posmod(pid, CHAR_NAMES.size())
 	return load_tex("res://assets/chars/char_%s_%d.png" % [CHAR_NAMES[idx], CHAR_PICKS[idx]])
 
+# 座位 id → 待机动画帧序列（0=原图 + 8 帧生成）。没有动画资产时回退单帧静态图。
+static var _frame_cache := {}
+static func char_frames(pid: int) -> Array:
+	var idx: int = posmod(pid, CHAR_NAMES.size())
+	if _frame_cache.has(idx):
+		return _frame_cache[idx]
+	var frames: Array = []
+	for i in 9:
+		var t := load_tex("res://assets/chars/anim/%s_idle_%d.png" % [CHAR_NAMES[idx], i])
+		if t == null:
+			break
+		frames.append(t)
+	if frames.is_empty():
+		var st := char_tex(pid)
+		if st != null:
+			frames.append(st)
+	_frame_cache[idx] = frames
+	return frames
+
 static func card_tex(suit: int) -> Texture2D:
 	match suit:
 		Rules.Suit.DAO: return load_tex("res://assets/cards/card_dao.png")
