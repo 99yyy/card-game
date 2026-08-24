@@ -1,0 +1,10 @@
+{
+  "name": "jueding-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "dev": "wrangler dev --local --port 8787",
+    "deploy": "wrangler deploy"
+  }
+}

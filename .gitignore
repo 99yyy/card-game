@@ -1,0 +1,17 @@
+# Godot
+.godot/
+*.tmp
+export_presets.cfg.bak
+
+# 构建产物
+build/
+export/
+
+# 服务端
+server/node_modules/
+server/.wrangler/
+.wrangler/
+
+# 系统
+.DS_Store
+*.log
