@@ -26,6 +26,15 @@ var _frame_i := 0
 var _frame_dir := 1
 var _frame_t := 0.0
 const FRAME_DT := 0.13
+# 一次性动画（表情/坠崖）：播完自动回待机
+var _once_frames: Array = []
+var _once_i := 0
+var _once_t := 0.0
+var _once_hold := false        # 播完停在最后一帧（坠崖用）
+var _fx_rect: TextureRect      # 金钟罩护体覆盖层
+var _fx_frames: Array = []
+var _fx_i := 0
+var _fx_t := 0.0
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(236, 0)
@@ -123,6 +132,26 @@ func _process(delta: float) -> void:
 		_emote_left -= delta
 		if _emote_left <= 0.0:
 			_emote_label.visible = false
+	# 一次性动画优先（表情/坠崖）
+	if not _once_frames.is_empty():
+		_once_t += delta
+		if _once_t >= 0.11:
+			_once_t = 0.0
+			_once_i += 1
+			if _once_i >= _once_frames.size():
+				if _once_hold:
+					_once_i = _once_frames.size() - 1   # 停格
+				else:
+					_once_frames = []
+					_once_i = 0
+			if not _once_frames.is_empty():
+				_avatar.texture = _once_frames[_once_i]
+		if not _once_frames.is_empty():
+			pass
+		# 播特效层
+		_tick_fx(delta)
+		return
+	_tick_fx(delta)
 	# 待机帧动画：乒乓播放（0..8..0），首尾无缝
 	if _frames.size() > 1:
 		_frame_t += delta
@@ -180,6 +209,63 @@ func react(kind: String) -> void:
 			var tw6 := _avatar.create_tween()
 			tw6.tween_property(_avatar, "modulate", Color(1.8, 1.5, 0.7), 0.12)
 			tw6.tween_property(_avatar, "modulate", Color(1, 1, 1), 0.5)
+
+
+func _tick_fx(delta: float) -> void:
+	if _fx_frames.is_empty() or _fx_rect == null:
+		return
+	_fx_t += delta
+	if _fx_t >= 0.11:
+		_fx_t = 0.0
+		_fx_i += 1
+		if _fx_i >= _fx_frames.size() * 2:    # 播两轮
+			_fx_frames = []
+			_fx_rect.visible = false
+			return
+		_fx_rect.texture = _fx_frames[_fx_i % _fx_frames.size()]
+
+
+# 播放一次性帧动画：表情（播完回待机）
+func play_emote_anim(pid: int, emote: int) -> void:
+	var f: Array = Art.emote_frames(pid, emote)
+	if f.size() > 1:
+		_once_frames = f
+		_once_i = 0
+		_once_t = 0.0
+		_once_hold = false
+		_avatar.texture = f[0]
+
+
+# 坠崖帧动画：播完停在最后一帧（配合旋转跌落）
+func play_fall_anim(pid: int) -> void:
+	var f: Array = Art.fall_frames(pid)
+	if f.size() > 1:
+		_once_frames = f
+		_once_i = 0
+		_once_t = 0.0
+		_once_hold = true
+		_avatar.texture = f[0]
+
+
+# 金钟罩护体：金钟特效覆盖在立绘上播两轮
+func play_bell_fx() -> void:
+	var f: Array = Art.bell_frames()
+	if f.is_empty():
+		return
+	if _fx_rect == null:
+		_fx_rect = TextureRect.new()
+		_fx_rect.custom_minimum_size = PORTRAIT_SIZE
+		_fx_rect.size = PORTRAIT_SIZE
+		_fx_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_fx_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_fx_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_avatar.get_parent().add_child(_fx_rect)
+	_fx_rect.visible = true
+	_fx_rect.modulate = Color(1, 1, 1, 0.75)
+	_fx_frames = f
+	_fx_i = 0
+	_fx_t = 0.0
+	_fx_rect.texture = f[0]
 
 
 # 坠崖时的摇晃演出（table 在 FALL 事件时调用）

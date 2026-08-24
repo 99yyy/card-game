@@ -125,6 +125,7 @@ var _btn_start_online: Button
 var _hud_nodes: Array = []      # 开局前隐藏的 HUD（顶栏/日志/表情/底区）
 
 var _opp_panels: Dictionary = {}   # pid -> panel（不含自己）
+var _lobby_prev_seats := 0         # 入座动画：检测新落座
 
 
 func _ready() -> void:
@@ -455,10 +456,27 @@ func _build_intro() -> void:
 	v.custom_minimum_size = Vector2(760, 0)
 	p.add_child(v)
 
-	var title := _mk_label(v, 34)
+	var banner_wrap := Control.new()
+	banner_wrap.custom_minimum_size = Vector2(480, 150)
+	var banner := TextureRect.new()
+	var btex: Texture2D = Art.title_banner()
+	if btex != null:
+		banner.texture = btex
+	banner.set_anchors_preset(Control.PRESET_FULL_RECT)
+	banner.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	banner.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	banner_wrap.add_child(banner)
+	var title := Label.new()
+	title.add_theme_font_size_override("font_size", 44)
 	title.text = "绝　顶"
+	title.set_anchors_preset(Control.PRESET_FULL_RECT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title.modulate = Color(1, 0.88, 0.55)
+	banner_wrap.add_child(title)
+	var bwc := CenterContainer.new()
+	bwc.add_child(banner_wrap)
+	v.add_child(bwc)
 	var subtitle := _mk_label(v, 15)
 	subtitle.text = "华山之巅，群雄论招。诈与被诈，一步之间。"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -876,16 +894,24 @@ func _on_event_popped(e: Dictionary) -> void:
 			var fp: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
 			if fp != null and fp.has_method("shake"):
 				fp.shake()
+				fp.play_fall_anim(int(e.pid))   # 逐帧挣扎 + 程序旋转跌落叠加
 			_react(int(e.pid), "fall")
 		"GOLDEN_BELL":
 			_flash(Color(1.0, 0.82, 0.3), 0.35)
 			_punch(int(e.pid))
 			_react(int(e.pid), "bell")
+			var bp: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
+			if bp != null and bp.has_method("play_bell_fx"):
+				bp.play_bell_fx()
 		"HOUFA_TRIGGERED":
 			_flash(Color(0.4, 0.5, 1.0), 0.25)
 		"EMOTE":
-			if _opp_panels.has(int(e.pid)):
-				_opp_panels[int(e.pid)].flash_emote(Rules.EMOTES[e.emote])
+			# 全场可见：事件由服务端广播给所有人；自己的面板也要弹（修：原来漏了自己）
+			var ep: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
+			if ep != null:
+				ep.flash_emote(Rules.EMOTES[e.emote])
+				if ep.has_method("play_emote_anim"):
+					ep.play_emote_anim(int(e.pid), int(e.emote))
 		"SKILL_USED":
 			# 私有结果提示（只有自己的视图里才有）
 			if int(e.pid) == my_id:
@@ -1437,6 +1463,8 @@ func _refresh_lobby() -> void:
 	_lobby_code_label.text = str(L.get("room", net.room))
 	var seats: Array = L.get("seats", [])
 	var is_host: bool = int(L.get("host", -1)) == net.my_seat
+	var prev_count := _lobby_prev_seats
+	_lobby_prev_seats = seats.size()
 	for c in _lobby_seats_row.get_children():
 		c.free()
 	var cushion: Texture2D = Art.load_tex("res://assets/ui/seat_empty.png")
@@ -1455,6 +1483,14 @@ func _refresh_lobby() -> void:
 		if i < seats.size():
 			var st: Dictionary = seats[i]
 			slot.texture = Art.char_tex(i)
+			if i >= prev_count:
+				# 新入座：从上方落下 + 弹跳（全场都会看到，lobby 广播驱动）
+				slot.position.y = -34
+				slot.modulate.a = 0.0
+				var tw := slot.create_tween().set_parallel(true)
+				tw.tween_property(slot, "position:y", 0.0, 0.3) \
+					.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BOUNCE)
+				tw.tween_property(slot, "modulate:a", 1.0, 0.18)
 			var tags := ""
 			if int(L.get("host", -1)) == i:
 				tags += "「房主」"

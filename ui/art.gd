@@ -41,6 +41,52 @@ static func char_frames(pid: int) -> Array:
 	_frame_cache[idx] = frames
 	return frames
 
+# 表情动画帧（7 帧：0 原图 + 6 生成）；无资产返回空数组
+static var _emote_cache := {}
+static func emote_frames(pid: int, emote: int) -> Array:
+	var idx: int = posmod(pid, CHAR_NAMES.size())
+	var key := "%d_%d" % [idx, emote]
+	if _emote_cache.has(key):
+		return _emote_cache[key]
+	var frames: Array = []
+	for i in 7:
+		var t := load_tex("res://assets/chars/emote/%s_e%d_%d.png" % [CHAR_NAMES[idx], emote, i])
+		if t == null:
+			break
+		frames.append(t)
+	_emote_cache[key] = frames
+	return frames
+
+# 坠崖帧（9 帧）
+static var _fall_cache := {}
+static func fall_frames(pid: int) -> Array:
+	var idx: int = posmod(pid, CHAR_NAMES.size())
+	if _fall_cache.has(idx):
+		return _fall_cache[idx]
+	var frames: Array = []
+	for i in 9:
+		var t := load_tex("res://assets/chars/fall/%s_fall_%d.png" % [CHAR_NAMES[idx], i])
+		if t == null:
+			break
+		frames.append(t)
+	_fall_cache[idx] = frames
+	return frames
+
+# 金钟罩护体特效帧（9 帧）
+static var _bell_cache: Array = []
+static func bell_frames() -> Array:
+	if not _bell_cache.is_empty():
+		return _bell_cache
+	for i in 9:
+		var t := load_tex("res://assets/fx/bell_%d.png" % i)
+		if t == null:
+			break
+		_bell_cache.append(t)
+	return _bell_cache
+
+static func title_banner() -> Texture2D:
+	return load_tex("res://assets/ui/title_banner.png")
+
 static func card_tex(suit: int) -> Texture2D:
 	match suit:
 		Rules.Suit.DAO: return load_tex("res://assets/cards/card_dao.png")
