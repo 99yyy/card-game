@@ -11,6 +11,7 @@ var _rng: RandomNumberGenerator
 
 # ---------- 全局 ----------
 var skills_enabled: bool = true
+var xinmo_enabled: bool = false      # 心魔变体（Mode.XINMO）
 var phase: int = Rules.Phase.SKILL_PICK
 var round_number: int = 0
 var current_suit: int = -1
@@ -29,11 +30,12 @@ var _players: Array = []             # Array[Dictionary]
 var _pending_events: Array = []
 
 # ---------- 构造 ----------
-func _init(seed: int = 0, skills: bool = true) -> void:
+func _init(seed: int = 0, skills: bool = true, xinmo: bool = false) -> void:
 	_seed = seed
 	_rng = RandomNumberGenerator.new()
 	_rng.seed = seed
 	skills_enabled = skills
+	xinmo_enabled = xinmo
 
 # ---------- 玩家访问 ----------
 func player_count() -> int:
@@ -202,6 +204,12 @@ func _is_legal(a: Dictionary) -> bool:
 			var idx: Array = a.get("indices", [])
 			if idx.size() < 1 or idx.size() > Rules.MAX_PLAY_CARDS:
 				return false
+			# 心魔只能单张打出（边界 35）
+			if xinmo_enabled and idx.size() > 1:
+				for i2 in idx:
+					if typeof(i2) == TYPE_INT and i2 >= 0 and i2 < p.hand.size() \
+							and p.hand[i2] == Rules.SUIT_XINMO:
+						return false
 			var seen := {}
 			for i in idx:
 				if typeof(i) != TYPE_INT:
@@ -289,7 +297,7 @@ func _start_round() -> void:
 	suit_changed_by = -1
 	current_suit = Rules.PLAYABLE_SUITS[_rng.randi_range(0, Rules.PLAYABLE_SUITS.size() - 1)]
 	# 洗全部 30 张（Fisher–Yates 走 _rng），给每个存活玩家发 5 张（边界 32）
-	var deck := Rules.build_deck()
+	var deck := Rules.build_deck_xinmo() if xinmo_enabled else Rules.build_deck()
 	_shuffle(deck)
 	var alive := _alive_players()
 	var counts := {}
@@ -380,6 +388,15 @@ func _resolve_reveal(challenger_id: int, target: Dictionary) -> void:
 			honest = false
 			break
 	_emit(Event.revealed(target.id, last_played_cards.duplicate(), current_suit, honest))
+	# 心魔现身（边界 36）：除出牌者外全场各退一步，不触发后发制人
+	if xinmo_enabled and last_played_cards.size() == 1 and last_played_cards[0] == Rules.SUIT_XINMO:
+		_emit({"type": "XINMO_TRIGGERED", "pid": target.id})
+		for q in _players:
+			if q.alive and q.id != target.id:
+				_retreat(q, 1)
+		# 下一轮由心魔出牌者开始（他是唯一全身而退的人）
+		_end_round(target.id)
+		return
 	if honest:
 		# 拆招的人冤枉了人 → 拆招者退步
 		var victim: Dictionary = _players[challenger_id]

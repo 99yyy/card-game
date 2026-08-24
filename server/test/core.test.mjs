@@ -195,3 +195,63 @@ test("退步概率符合 §5（1/6→1/1，2 万采样）", () => {
     assert.ok(Math.abs(rate - expect) < 0.02, `第${step}步: ${rate.toFixed(3)} vs ${expect.toFixed(3)}`);
   }
 });
+
+// ---------- 多玩法内核（v1.0）----------
+import { GameDice, diceBotDecide } from "../src/core/game_dice.js";
+import { GamePoison, poisonBotDecide } from "../src/core/game_poison.js";
+
+test("心魔: 单出限制/永真/连坐", () => {
+  const g = new Game(901, true, true);
+  g.newGame(["a","b","c"], [true,true,true]);
+  for (let i = 0; i < 3; i++) g.apply({ type: "PICK_SKILL", pid: i, skill: 1 });
+  g.phase = R.Phase.PLAY; g.currentSuit = R.Suit.DAO;
+  g.currentPlayer = 0; g.roundStarter = 0;
+  g.players[0].hand = [R.SUIT_XINMO, R.Suit.DAO];
+  g.players[1].hand = [R.Suit.DAO]; g.players[2].hand = [R.Suit.DAO];
+  for (const p of g.players) p.hollowIndex = 6;
+  const bad = g.apply({ type: "PLAY", pid: 0, indices: [0, 1] });
+  assert.equal(bad[0].type, "REJECTED");
+  g.apply({ type: "PLAY", pid: 0, indices: [0] });
+  const evs = g.apply({ type: "CHALLENGE", pid: 1 });
+  assert.ok(evs.some(e => e.type === "XINMO_TRIGGERED"));
+  assert.equal(g.players[0].stepsTaken, 0);
+  assert.equal(g.players[1].stepsTaken, 1);
+  assert.equal(g.players[2].stepsTaken, 1);
+});
+
+test("暗器: 150 局机器人局必终局", () => {
+  for (let seed = 1; seed <= 150; seed++) {
+    const n = 2 + (seed % 3);
+    const g = new GameDice(seed + 7000);
+    g.newGame(Array.from({length:n},(_,i)=>"P"+i), Array(n).fill(true));
+    g.forceResolveSkillPick();
+    const rng = new Rng(seed);
+    let guard = 0;
+    while (g.phase !== R.Phase.GAME_OVER && guard++ < 20000)
+      g.apply(diceBotDecide(g.viewFor(g.currentPlayer), rng));
+    assert.equal(g.phase, R.Phase.GAME_OVER, `dice seed ${seed}`);
+  }
+});
+
+test("递毒: 150 局机器人局必终局 + 机密裁剪", () => {
+  for (let seed = 1; seed <= 150; seed++) {
+    const n = 2 + (seed % 3);
+    const g = new GamePoison(seed + 8000);
+    g.newGame(Array.from({length:n},(_,i)=>"P"+i), Array(n).fill(true));
+    g.forceResolveSkillPick();
+    const rng = new Rng(seed);
+    let guard = 0;
+    while (g.phase !== R.Phase.GAME_OVER && guard++ < 20000)
+      g.apply(poisonBotDecide(g.viewFor(g.currentPlayer), rng));
+    assert.equal(g.phase, R.Phase.GAME_OVER, `poison seed ${seed}`);
+  }
+  const g = new GamePoison(905);
+  g.newGame(["a","b","c"], [true,true,true]);
+  g.forceResolveSkillPick();
+  const cp = g.currentPlayer;
+  g.apply({ type: "OFFER", pid: cp, card_index: 0, target: (cp+1)%3, claim: 2 });
+  const third = (cp+2)%3;
+  assert.ok(!JSON.stringify(g.viewFor(third)).includes("offerCard"));
+  assert.equal(g.viewFor(third).you.peeked, -1);
+  assert.ok(g.viewFor((cp+1)%3).you.peeked >= 0);
+});

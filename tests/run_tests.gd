@@ -9,6 +9,7 @@ func _initialize() -> void:
 	TestEdges.run_all()
 	TestSkills.run_all()
 	TestView.run_all()
+	TestModes.run_all()
 	var fails: Array = Helpers.failures()
 	if fails.is_empty():
 		print("\n=== ALL TESTS PASSED ===")

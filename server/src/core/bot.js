@@ -33,9 +33,14 @@ export function botDecide(view, rng) {
     if (rng.randf() < Math.min(p, 0.95)) return { type: "CHALLENGE", pid: me.id };
   }
 
+  const xinmoAt = me.hand.indexOf(R.SUIT_XINMO);
+  if (xinmoAt >= 0 && rng.randf() < 0.3)
+    return { type: "PLAY", pid: me.id, indices: [xinmoAt] };
   const truths = [];
   for (let i = 0; i < me.hand.length; i++)
     if (me.hand[i] === view.current_suit || me.hand[i] === R.Suit.HUAJIN) truths.push(i);
+  if (truths.length === 0 && xinmoAt >= 0)
+    return { type: "PLAY", pid: me.id, indices: [xinmoAt] };
   if (truths.length >= 1) {
     const r = rng.randf();
     let n = r < 0.60 ? 1 : r < 0.90 ? 2 : 3;

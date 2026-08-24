@@ -19,6 +19,7 @@ var _emote_left := 0.0
 var _was_current := false
 var _sb_normal: StyleBoxFlat
 var _sb_current: StyleBoxFlat
+var _sub_label: Label
 var _idle_tween: Tween
 var _frames: Array = []
 var _frames_pid := -1
@@ -101,6 +102,12 @@ func _ready() -> void:
 	_hand_row = HBoxContainer.new()
 	_hand_row.add_theme_constant_override("separation", 3)
 	col.add_child(_hand_row)
+
+	_sub_label = Label.new()
+	_sub_label.add_theme_font_size_override("font_size", 13)
+	_sub_label.modulate = Color(0.9, 0.85, 0.6)
+	_sub_label.visible = false
+	col.add_child(_sub_label)
 
 	_cliff = preload("res://ui/cliff_bar.gd").new()
 	_cliff.slab_size = Vector2(24, 16)
@@ -300,7 +307,13 @@ func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
 	_skill_icon.visible = icon != null and d.skill != Rules.Skill.NONE
 	if icon != null:
 		_skill_icon.texture = icon
-	if d.skill == Rules.Skill.NONE:
+	var sub: String = str(d.get("sub_text", ""))
+	_sub_label.visible = sub != ""
+	_sub_label.text = sub
+	if d.get("hide_skill", false):
+		_skill_label.text = ""
+		_skill_icon.visible = false
+	elif d.skill == Rules.Skill.NONE:
 		_skill_label.text = "报门户中…"
 	else:
 		var uses := ""
@@ -333,7 +346,9 @@ func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
 	cnt.add_theme_font_size_override("font_size", 12)
 	_hand_row.add_child(cnt)
 
-	_cliff.set_state(d.steps_taken, d.has_gap, d.alive)
+	_cliff.visible = not d.get("hide_cliff", false)
+	if _cliff.visible:
+		_cliff.set_state(d.steps_taken, d.has_gap, d.alive)
 
 	_timer_bar.visible = thinking
 	if thinking:

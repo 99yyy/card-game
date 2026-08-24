@@ -93,6 +93,7 @@ static func card_tex(suit: int) -> Texture2D:
 		Rules.Suit.JIAN: return load_tex("res://assets/cards/card_jian.png")
 		Rules.Suit.ZHANG: return load_tex("res://assets/cards/card_zhang.png")
 		Rules.Suit.HUAJIN: return load_tex("res://assets/cards/card_huajin.png")
+		Rules.SUIT_XINMO: return xinmo_tex()
 	return null
 
 static func card_back_tex() -> Texture2D:
@@ -121,6 +122,25 @@ static func skill_icon_tex(skill: int) -> Texture2D:
 		Rules.Skill.BIANXUSHI: name = "bianxushi"
 		_: return null
 	return load_tex("res://assets/icons/skill_%s.png" % name)
+
+# ---------- 多玩法资产 ----------
+static func xinmo_tex() -> Texture2D:
+	return load_tex("res://assets/cards/card_xinmo.png")
+
+static func poison_tex(kind: int) -> Texture2D:
+	return load_tex("res://assets/cards/poison_%d.png" % kind)
+
+static func poison_texes() -> Array:
+	var out := []
+	for k in 5:
+		out.append(poison_tex(k))
+	return out
+
+static func poison_box_tex() -> Texture2D:
+	return load_tex("res://assets/cards/poison_box.png")
+
+static func dice_tex(face: int) -> Texture2D:
+	return load_tex("res://assets/icons/dice_%d.png" % face)
 
 static func panel_tex() -> Texture2D:
 	return load_tex("res://assets/ui/panel_dark.png")

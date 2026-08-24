@@ -47,6 +47,24 @@ static func force_skill(gs: GameState, pid: int, skill: int) -> void:
 static func force_steps(gs: GameState, pid: int, n: int) -> void:
 	gs._players[pid].steps_taken = n
 
+static func names_n(n: int) -> Array:
+	var a := []
+	for i in n:
+		a.append("P%d" % i)
+	return a
+
+static func bots_n(n: int) -> Array:
+	var a := []
+	for i in n:
+		a.append(true)
+	return a
+
+static func has_event(events: Array, t: String) -> bool:
+	for e in events:
+		if e.get("type", "") == t:
+			return true
+	return false
+
 # ---------- 单步驱动（机器人自动决策，走 view_for） ----------
 static func step(gs: GameState) -> Array:
 	match gs.phase:

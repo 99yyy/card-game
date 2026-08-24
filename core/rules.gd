@@ -3,7 +3,7 @@ extends RefCounted
 
 # ---------- 花色 ----------
 enum Suit { DAO = 0, JIAN = 1, ZHANG = 2, HUAJIN = 3 }   # 刀 / 剑 / 掌 / 化劲(百搭)
-const SUIT_NAMES := ["刀", "剑", "掌", "化劲"]
+const SUIT_NAMES := ["刀", "剑", "掌", "化劲", "心魔"]
 const PLAYABLE_SUITS := [Suit.DAO, Suit.JIAN, Suit.ZHANG]   # 化劲不能当本轮路数
 
 const DECK_COUNTS := { Suit.DAO: 6, Suit.JIAN: 6, Suit.ZHANG: 6, Suit.HUAJIN: 2 }  # 共 20，忠实复刻原版
@@ -50,10 +50,44 @@ const CANGZHUO_FAKE_MAX  := 18.0
 const BOT_THINK_MIN_SEC  := 1.5
 const BOT_THINK_MAX_SEC  := 8.0
 
+# ---------- 玩法模式（v1.0 多玩法）----------
+enum Mode { LUNZHAO = 0, XINMO = 1, ANQI = 2, DIDU = 3 }
+const MODE_NAMES := ["论招", "心魔", "暗器", "递毒"]
+const MODE_DESCS := [
+	"经典：盖牌虚报，拆招定生死",
+	"论招变体：牌堆混入一张心魔——拆它者，连坐全场",
+	"大话骰：暗器囊里藏几枚，牛皮越吹越大",
+	"五毒：盖盒递毒，信、不信，还是转赠祸水？",
+]
+
+# 心魔（论招变体）：占用花色值 4，只能单出、永远为真
+const SUIT_XINMO := 4
+
+# 暗器（大话骰）
+const DICE_START := 5                # 开局每人 5 枚
+const DICE_FACE_NAMES := ["飞刀", "柳叶镖", "毒针", "铁蒺藜", "袖箭", "无影针"]
+const DICE_WILD := 5                 # 无影针 = 百搭，不可被叫价
+const DICE_BIDDABLE := [0, 1, 2, 3, 4]
+
+# 递毒（五毒）
+const POISON_NAMES := ["蛇", "蝎", "蜈蚣", "蟾蜍", "蜘蛛"]
+const POISON_PER_KIND := 8           # 每种 8 张，共 40，全部发完
+const POISON_DEATH := 4              # 同种集满 4 只毒发出局
+
 # ---------- 表情 ----------
 const EMOTES := ["冷笑", "抱拳", "拂袖", "摇头", "抚须", "请"]
 
 # ---------- 工具 ----------
+static func build_deck_xinmo() -> Array:
+	# 心魔变体：6/6/6/化劲1/心魔1，仍 20 张
+	var d := []
+	for suit in [Suit.DAO, Suit.JIAN, Suit.ZHANG]:
+		for i in 6:
+			d.append(suit)
+	d.append(Suit.HUAJIN)
+	d.append(SUIT_XINMO)
+	return d
+
 static func build_deck() -> Array:
 	var d := []
 	# 按枚举固定顺序遍历，避免 Dictionary 键遍历顺序不稳定（坑 4）
@@ -63,4 +97,4 @@ static func build_deck() -> Array:
 	return d   # 长度必须 == DECK_SIZE
 
 static func is_truthful(card: int, declared_suit: int) -> bool:
-	return card == declared_suit or card == Suit.HUAJIN
+	return card == declared_suit or card == Suit.HUAJIN or card == SUIT_XINMO

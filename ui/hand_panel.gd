@@ -14,6 +14,8 @@ var _selected: Dictionary = {}
 var _boxes: Array = []
 var _hovered := -1
 var _prev_count := 0        # 只有牌变多（新发牌）才播飞入动画，出牌后不重播
+var tex_override: Array = []      # 递毒模式：五毒牌面（下标=毒物种类）
+var max_select := Rules.MAX_PLAY_CARDS
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 10)
@@ -33,9 +35,10 @@ func _rebuild(deal_anim := false) -> void:
 	for c in get_children():
 		c.free()
 	_boxes = []
+	var cs := CARD_SIZE if _hand.size() <= 6 else Vector2(84, 126)   # 递毒 10+ 张时缩小防溢出
 	for i in _hand.size():
 		var btn := Button.new()
-		btn.custom_minimum_size = CARD_SIZE
+		btn.custom_minimum_size = cs
 		btn.toggle_mode = true
 		btn.flat = true
 		btn.focus_mode = Control.FOCUS_NONE
@@ -75,7 +78,11 @@ func _animate_card(idx: int) -> void:
 	tw.tween_property(face, "position:y", target, 0.12).set_ease(Tween.EASE_OUT)
 
 func _card_visual(suit: int) -> Control:
-	var tex: Texture2D = Art.card_tex(suit)
+	var tex: Texture2D = null
+	if not tex_override.is_empty() and suit >= 0 and suit < tex_override.size():
+		tex = tex_override[suit]
+	else:
+		tex = Art.card_tex(suit)
 	if tex != null:
 		var tr := TextureRect.new()
 		tr.texture = tex
@@ -115,7 +122,7 @@ func _on_toggle(idx: int) -> void:
 		_selected[idx] = true
 	else:
 		_selected.erase(idx)
-	if _selected.size() > Rules.MAX_PLAY_CARDS:
+	if _selected.size() > max_select:
 		var first: int = _selected.keys()[0]
 		_selected.erase(first)
 		_boxes[first].set_pressed_no_signal(false)

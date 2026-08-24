@@ -32,6 +32,25 @@ export const BOT_THINK_MAX_MS = 9000;
 
 export const EMOTES = ["冷笑", "抱拳", "拂袖", "摇头", "抚须", "请"];
 
+// ---------- 玩法模式 ----------
+export const Mode = { LUNZHAO: 0, XINMO: 1, ANQI: 2, DIDU: 3 };
+export const MODE_NAMES = ["论招", "心魔", "暗器", "递毒"];
+export const SUIT_XINMO = 4;
+export const DICE_START = 5;
+export const DICE_WILD = 5;
+export const DICE_BIDDABLE = [0, 1, 2, 3, 4];
+export const POISON_KINDS = 5;
+export const POISON_PER_KIND = 8;
+export const POISON_DEATH = 4;
+
+export function buildDeckXinmo() {
+  const d = [];
+  for (const suit of [Suit.DAO, Suit.JIAN, Suit.ZHANG]) for (let i = 0; i < 6; i++) d.push(suit);
+  d.push(Suit.HUAJIN);
+  d.push(SUIT_XINMO);
+  return d;
+}
+
 export function buildDeck() {
   const d = [];
   for (const suit of [Suit.DAO, Suit.JIAN, Suit.ZHANG, Suit.HUAJIN])
@@ -40,5 +59,5 @@ export function buildDeck() {
 }
 
 export function isTruthful(card, declaredSuit) {
-  return card === declaredSuit || card === Suit.HUAJIN;
+  return card === declaredSuit || card === Suit.HUAJIN || card === SUIT_XINMO;
 }

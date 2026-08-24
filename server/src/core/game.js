@@ -6,7 +6,8 @@ import * as R from "./rules.js";
 import { Rng } from "./rng.js";
 
 export class Game {
-  constructor(seed, skillsEnabled = true) {
+  constructor(seed, skillsEnabled = true, xinmo = false) {
+    this.xinmoEnabled = xinmo;
     this.rng = new Rng(seed);
     this.seed = seed;
     this.skillsEnabled = skillsEnabled;
@@ -132,6 +133,8 @@ export class Game {
           if (!Number.isInteger(i) || i < 0 || i >= p.hand.length || seen.has(i)) return false;
           seen.add(i);
         }
+        if (this.xinmoEnabled && idx.length > 1)
+          for (const i of idx) if (p.hand[i] === R.SUIT_XINMO) return false;   // 心魔只能单出
         return true;
       }
       case "CHALLENGE":
@@ -209,7 +212,7 @@ export class Game {
     this.roundNumber += 1;
     this.suitChangedBy = -1;
     this.currentSuit = R.PLAYABLE_SUITS[this.rng.randiRange(0, R.PLAYABLE_SUITS.length - 1)];
-    const deck = R.buildDeck();
+    const deck = this.xinmoEnabled ? R.buildDeckXinmo() : R.buildDeck();
     this._shuffle(deck);                              // 边界 32：每轮全洗
     const alive = this.players.filter(p => p.alive);
     const counts = {};
@@ -272,6 +275,13 @@ export class Game {
   _resolveReveal(challengerId, target) {
     const honest = this.lastPlayedCards.every(c => R.isTruthful(c, this.currentSuit));
     this._emit({ type: "REVEALED", pid: target.id, cards: [...this.lastPlayedCards], suit: this.currentSuit, honest });
+    // 心魔现身：除出牌者外全场各退一步，不触发后发制人
+    if (this.xinmoEnabled && this.lastPlayedCards.length === 1 && this.lastPlayedCards[0] === R.SUIT_XINMO) {
+      this._emit({ type: "XINMO_TRIGGERED", pid: target.id });
+      for (const q of this.players) if (q.alive && q.id !== target.id) this._retreat(q, 1);
+      this._endRound(target.id);
+      return;
+    }
     if (honest) {
       const victim = this.players[challengerId];
       if (this.skillsEnabled && target.skill === R.Skill.HOUFA && this.roundNumber >= target.houfaReadyRound) {

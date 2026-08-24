@@ -127,6 +127,29 @@ var _hud_nodes: Array = []      # 开局前隐藏的 HUD（顶栏/日志/表情/
 var _opp_panels: Dictionary = {}   # pid -> panel（不含自己）
 var _lobby_prev_seats := 0         # 入座动画：检测新落座
 var _char_btns: Array = []         # 报门户选皮囊按钮（高亮当前选择）
+var game_mode := 0                 # Rules.Mode：0 论招 1 心魔 2 暗器 3 递毒
+var _mode_btns: Array = []         # 开场模式选择按钮
+var _lobby_mode_btns: Array = []   # 等待厅模式按钮（房主可点）
+var _lobby_mode_label: Label
+var _ready_btn: Button             # 暗器/递毒的报门户"准备"按钮
+var _skill_row_node: HBoxContainer # 技能行（新模式隐藏）
+var _dice_zone: HBoxContainer      # 暗器：我的骰盅+叫价控件
+var _dice_row: HBoxContainer
+var _dice_n := 1
+var _dice_face := 0
+var _dice_n_label: Label
+var _dice_face_btns: Array = []
+var _btn_bid: Button
+var _poison_ctl: VBoxContainer     # 递毒：声称/目标/递出 + 应答按钮
+var _poison_claim := 0
+var _poison_target := -1
+var _poison_claim_btns: Array = []
+var _poison_target_box: HBoxContainer
+var _btn_offer: Button
+var _btn_believe: Button
+var _btn_doubt: Button
+var _btn_passon: Button
+var _passon_mode := false
 
 
 func _ready() -> void:
@@ -142,6 +165,7 @@ func _ready() -> void:
 	# 先看玩法介绍，点「开始对局」才发牌（用户反馈：需要开场白）
 	for n in _hud_nodes:
 		n.visible = false
+	_on_mode_pick(0)
 	_intro_modal.visible = true
 
 
@@ -252,6 +276,8 @@ func _build_ui() -> void:
 	_hand_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	bottom.add_child(_hand_panel)
 	_hand_panel.selection_changed.connect(_on_selection_changed)
+	_build_dice_zone(bottom)
+	_build_poison_ctl(bottom)
 
 	# 操作按钮列
 	var btn_col := VBoxContainer.new()
@@ -356,6 +382,7 @@ func _build_ui() -> void:
 	var srow := HBoxContainer.new()
 	srow.add_theme_constant_override("separation", 10)
 	sv.add_child(srow)
+	_skill_row_node = srow
 	for i in Rules.ALL_SKILLS:
 		var b := Button.new()
 		b.custom_minimum_size = Vector2(118, 138) if _touch else Vector2(104, 118)
@@ -384,6 +411,15 @@ func _build_ui() -> void:
 		nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		bv.add_child(nl)
 		srow.add_child(b)
+	_ready_btn = Button.new()
+	_ready_btn.text = "准备"
+	_ready_btn.custom_minimum_size = Vector2(160, 48)
+	_ready_btn.add_theme_font_size_override("font_size", 20)
+	_ready_btn.visible = false
+	_ready_btn.pressed.connect(_on_ready)
+	var rbc := CenterContainer.new()
+	rbc.add_child(_ready_btn)
+	sv.add_child(rbc)
 	_skill_desc_label = _mk_label(sv, 15)
 	_skill_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_skill_desc_label.modulate = Color(0.85, 0.82, 0.7)
@@ -538,6 +574,31 @@ func _build_intro() -> void:
 	_intro_start_btn.add_theme_font_size_override("font_size", 20)
 	_intro_start_btn.pressed.connect(_on_intro_start)
 
+	# 模式选择（v1.0 多玩法）
+	var mode_hint := _mk_label(v, 14)
+	mode_hint.text = "选个玩法 ——"
+	mode_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mode_hint.modulate = Color(0.8, 0.78, 0.68)
+	var mode_row := HBoxContainer.new()
+	mode_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	mode_row.add_theme_constant_override("separation", 8)
+	for mi in 4:
+		var mb := Button.new()
+		mb.text = Rules.MODE_NAMES[mi]
+		mb.tooltip_text = Rules.MODE_DESCS[mi]
+		mb.custom_minimum_size = Vector2(96, 44)
+		mb.focus_mode = Control.FOCUS_NONE
+		mb.add_theme_font_size_override("font_size", 18)
+		mb.pressed.connect(_on_mode_pick.bind(mi))
+		mode_row.add_child(mb)
+		_mode_btns.append(mb)
+	v.add_child(mode_row)
+	var mode_desc := _mk_label(v, 13)
+	mode_desc.name = "ModeDesc"
+	mode_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mode_desc.modulate = Color(0.75, 0.72, 0.62)
+	mode_desc.text = Rules.MODE_DESCS[0]
+
 	# 联机区：昵称 + 建房 / 房号加入
 	var net_row := HBoxContainer.new()
 	net_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -661,7 +722,13 @@ func _new_game() -> void:
 		names.append("机器人%d" % i)
 		bots.append(true)
 	var seed: int = int(Time.get_unix_time_from_system()) & 0x7fffffff
-	gs = GameState.new(seed, true)
+	match game_mode:
+		Rules.Mode.ANQI:
+			gs = GameDice.new(seed)
+		Rules.Mode.DIDU:
+			gs = GamePoison.new(seed)
+		_:
+			gs = GameState.new(seed, true, game_mode == Rules.Mode.XINMO)
 	gs.new_game(names, bots)
 	_driver_rng.seed = hash(str(seed) + "driver")
 
@@ -673,8 +740,14 @@ func _new_game() -> void:
 	_fake_elapsed = 0.0
 	_fake_owner = -1
 	_turn_time_left = Rules.PLAY_TIMEOUT_SEC
-	_skill_pick_left = Rules.SKILL_PICK_SEC
+	_skill_pick_left = 10.0 if game_mode >= Rules.Mode.ANQI else Rules.SKILL_PICK_SEC
 	_swap_left = Rules.SWAP_WINDOW_SEC
+	_ready_btn.text = "准备"
+	_ready_btn.disabled = false
+	_passon_mode = false
+	_poison_target = -1
+	_hand_panel.tex_override = Art.poison_texes() if game_mode == Rules.Mode.DIDU else []
+	_hand_panel.max_select = 1 if game_mode == Rules.Mode.DIDU else Rules.MAX_PLAY_CARDS
 	_hand_snapshot = []
 	_reveal_cards = []
 	_reveal_pid = -1
@@ -735,11 +808,17 @@ func _process(delta: float) -> void:
 			Rules.Phase.GAME_OVER:
 				_show_game_over()
 			Rules.Phase.SKILL_PICK:
-				_tick_skill_pick(delta)
+				if game_mode >= Rules.Mode.ANQI:
+					_tick_pick_simple(delta)
+				else:
+					_tick_skill_pick(delta)
 			Rules.Phase.SWAP_WINDOW:
 				_tick_swap(delta)
 			Rules.Phase.PLAY:
-				_tick_play(delta)
+				if game_mode >= Rules.Mode.ANQI:
+					_tick_play_mode(delta)
+				else:
+					_tick_play(delta)
 	_refresh()
 
 
@@ -863,7 +942,8 @@ func _punch(pid: int) -> void:
 # 每个事件在旁白上停留多久：重头戏停久一点，杂事快速过
 func _delay_for(e: Dictionary) -> float:
 	match e.get("type", ""):
-		"REVEALED", "GOLDEN_BELL", "FALL", "HOUFA_TRIGGERED", "GAME_OVER":
+		"REVEALED", "GOLDEN_BELL", "FALL", "HOUFA_TRIGGERED", "GAME_OVER", \
+		"XINMO_TRIGGERED", "DICE_REVEALED", "OFFER_REVEALED", "POISONED_OUT":
 			return 2.4
 		"CHALLENGED", "HEAVEN_CHECK":
 			return 1.8
@@ -950,6 +1030,9 @@ func _on_event_popped(e: Dictionary) -> void:
 				bp.play_bell_fx()
 		"HOUFA_TRIGGERED":
 			_flash(Color(0.4, 0.5, 1.0), 0.25)
+		"XINMO_TRIGGERED":
+			_flash(Color(0.45, 0.1, 0.55), 0.5)
+			_punch(int(e.pid))
 		"EMOTE":
 			# 全场可见：事件由服务端广播给所有人；自己的面板也要弹（修：原来漏了自己）
 			var ep: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
@@ -980,6 +1063,15 @@ func _on_event_popped(e: Dictionary) -> void:
 # ============================================================
 
 func _on_play() -> void:
+	if game_mode == Rules.Mode.ANQI:
+		_on_bid()
+		return
+	if game_mode == Rules.Mode.DIDU:
+		if _passon_mode:
+			_confirm_passon()
+		else:
+			_on_offer()
+		return
 	var indices: Array = _hand_panel.selected_indices()
 	if indices.size() >= 1 and indices.size() <= Rules.MAX_PLAY_CARDS:
 		_apply(Action.play(my_id, indices))
@@ -1051,10 +1143,18 @@ func _refresh() -> void:
 
 	# 顶栏
 	_round_label.text = "第 %d 轮" % _view.round_number
-	if _view.round_number <= 0 or _view.current_suit < 0:
+	if game_mode >= Rules.Mode.ANQI:
+		_refresh_mode_ui()
+	if game_mode == Rules.Mode.ANQI:
+		_suit_label.text = "暗器局 · 全场 %d 枚" % int(_view.get("total_dice", 0))
+		_suit_card.visible = false
+	elif game_mode == Rules.Mode.DIDU:
+		_suit_label.text = "五毒局"
+		_suit_card.visible = false
+	elif _view.round_number <= 0 or _view.current_suit < 0:
 		_suit_label.text = "路数 ——"
 		_suit_card.visible = false
-	else:
+	elif true:
 		var changed := ""
 		if _view.suit_changed_by != -1:
 			changed = "（%s 改弦）" % _names[_view.suit_changed_by]
@@ -1074,6 +1174,16 @@ func _refresh() -> void:
 		d["thinking_text"] = "…按剑不发"
 		d["own_timer"] = -1
 		d["houfa_cooling"] = d.skill == Rules.Skill.HOUFA and _view.round_number < d.houfa_ready_round
+		if game_mode >= Rules.Mode.ANQI:
+			d["hide_skill"] = true
+		if game_mode == Rules.Mode.DIDU:
+			d["hide_cliff"] = true
+		if game_mode == Rules.Mode.DIDU and d.has("collected"):
+			var parts := []
+			for k in Rules.POISON_NAMES.size():
+				if int(d.collected[k]) > 0:
+					parts.append("%s%d" % [Rules.POISON_NAMES[k], int(d.collected[k])])
+			d["sub_text"] = "毒：" + "、".join(parts) if not parts.is_empty() else "无毒在身"
 		if gs.phase == Rules.Phase.PLAY and is_current and d.alive:
 			d["thinking"] = true
 			if _is_cangzhuo(i, _view):
@@ -1093,79 +1203,65 @@ func _refresh() -> void:
 		elif _opp_panels.has(i):
 			_opp_panels[i].set_data(d, false, is_current)
 
-	# 舞台：亮招 > 牌背 > 空。内容签名没变就不重建（重建会杀掉翻牌动画）
-	var sig := ""
-	if not _reveal_cards.is_empty():
-		sig = "R%s|%d" % [str(_reveal_cards), _reveal_pid]
-		_claim_label.text = "%s 的招亮出真章 —— %s" % [_names[_reveal_pid], "句句是真" if _reveal_honest else "虚招被识破！"]
-	elif _view.last_played_count > 0 and _view.last_player_who_played >= 0:
-		sig = "B%d|%d" % [_view.last_played_count, _view.last_player_who_played]
-		_claim_label.text = "%s 押下 %d 式，声称皆是【%s】" % [
-			_names[_view.last_player_who_played], _view.last_played_count, Rules.SUIT_NAMES[_view.current_suit]]
+	# 舞台：按模式分派
+	if game_mode == Rules.Mode.ANQI:
+		_refresh_stage_dice()
+	elif game_mode == Rules.Mode.DIDU:
+		_refresh_stage_poison()
 	else:
-		_claim_label.text = "本轮尚未有人出招" if gs.phase == Rules.Phase.PLAY else ""
-	if sig != _stage_sig:
-		_stage_sig = sig
-		for c in _stage_cards.get_children():
-			c.free()
-		if not _reveal_cards.is_empty():
-			# 逐张"翻牌"：横向 0→1 展开，错峰
-			for i in _reveal_cards.size():
-				var card := _mk_stage_card(Art.card_tex(_reveal_cards[i]), _reveal_cards[i])
-				card.pivot_offset = Vector2(48, 72)
-				card.scale = Vector2(0.0, 1.0)
-				_stage_cards.add_child(card)
-				var tw := card.create_tween()
-				tw.tween_interval(0.13 * i)
-				tw.tween_property(card, "scale", Vector2.ONE, 0.16) \
-					.set_ease(Tween.EASE_OUT)
-		elif _view.last_played_count > 0 and _view.last_player_who_played >= 0:
-			# 牌背弹入：缩放 + 淡入错峰
-			for i in _view.last_played_count:
-				var back := _mk_stage_card(Art.card_back_tex(), -1)
-				back.pivot_offset = Vector2(48, 72)
-				back.scale = Vector2(0.55, 0.55)
-				back.modulate.a = 0.0
-				_stage_cards.add_child(back)
-				var tw := back.create_tween().set_parallel(true)
-				tw.tween_property(back, "scale", Vector2.ONE, 0.2) \
-					.set_delay(0.06 * i).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
-				tw.tween_property(back, "modulate:a", 1.0, 0.15).set_delay(0.06 * i)
+		_refresh_stage_lunzhao()
 
-	# 手牌（仅内容变化时重建，保留选中态）
-	var hand: Array = _view.you.hand
-	if str(hand) != str(_hand_snapshot):
-		_hand_snapshot = hand.duplicate()
-		_hand_panel.set_hand(hand)
-	var in_play: bool = gs.phase == Rules.Phase.PLAY or gs.phase == Rules.Phase.SWAP_WINDOW
-	_bottom_zone.visible = _view.you.alive and gs.phase != Rules.Phase.SKILL_PICK
-	_emote_bar.visible = _view.you.alive and gs.phase != Rules.Phase.SKILL_PICK
+	# 底区：按模式分派
+	if game_mode == Rules.Mode.ANQI:
+		_refresh_bottom_dice()
+	elif game_mode == Rules.Mode.DIDU:
+		_refresh_bottom_poison()
+	else:
+		# 手牌（仅内容变化时重建，保留选中态）
+		var hand: Array = _view.you.hand
+		if str(hand) != str(_hand_snapshot):
+			_hand_snapshot = hand.duplicate()
+			_hand_panel.set_hand(hand)
+		var in_play: bool = gs.phase == Rules.Phase.PLAY or gs.phase == Rules.Phase.SWAP_WINDOW
+		_bottom_zone.visible = _view.you.alive and gs.phase != Rules.Phase.SKILL_PICK
+		_emote_bar.visible = _view.you.alive and gs.phase != Rules.Phase.SKILL_PICK
 
-	# 按钮态
-	var is_human_turn: bool = gs.phase == Rules.Phase.PLAY \
-		and int(_view.current_player) == my_id and _view.you.hand.size() > 0
-	_play_button.disabled = not is_human_turn or _hand_panel.selected_indices().size() < 1
-	_challenge_button.disabled = not (is_human_turn and _has_type(_view.legal_actions, "CHALLENGE"))
-	var sk: int = _view.you.skill
-	var can_skill := is_human_turn and _has_skill_action(_view.legal_actions)
-	_skill_button.visible = can_skill
-	if can_skill:
-		if sk == Rules.Skill.TINGJIN:
-			_skill_button.text = "听劲 ×%d" % _view.you.skill_uses_left
-		elif sk == Rules.Skill.BIANXUSHI:
-			_skill_button.text = "辨虚实"
-		else:
-			_skill_button.text = Rules.SKILL_NAMES[sk] if sk != Rules.Skill.NONE else "技能"
+		# 按钮态
+		var is_human_turn: bool = gs.phase == Rules.Phase.PLAY \
+			and int(_view.current_player) == my_id and _view.you.hand.size() > 0
+		_play_button.disabled = not is_human_turn or _hand_panel.selected_indices().size() < 1
+		_challenge_button.disabled = not (is_human_turn and _has_type(_view.legal_actions, "CHALLENGE"))
+		var sk: int = _view.you.skill
+		var can_skill := is_human_turn and _has_skill_action(_view.legal_actions)
+		_skill_button.visible = can_skill
+		if can_skill:
+			if sk == Rules.Skill.TINGJIN:
+				_skill_button.text = "听劲 ×%d" % _view.you.skill_uses_left
+			elif sk == Rules.Skill.BIANXUSHI:
+				_skill_button.text = "辨虚实"
+			else:
+				_skill_button.text = Rules.SKILL_NAMES[sk] if sk != Rules.Skill.NONE else "技能"
 
 	# 弹层
 	if gs.phase != Rules.Phase.PLAY or int(_view.current_player) != my_id:
 		_probe_modal.visible = false
 		_listen_modal.visible = false
-	var picking: bool = gs.phase == Rules.Phase.SKILL_PICK \
-		and _view.you.pending_skill_pick == Rules.Skill.NONE and _view.you.alive
+	var picking: bool
+	if game_mode >= Rules.Mode.ANQI:
+		picking = gs.phase == Rules.Phase.SKILL_PICK \
+			and not bool(_view.you.get("ready", true)) and _view.you.alive
+	else:
+		picking = gs.phase == Rules.Phase.SKILL_PICK \
+			and _view.you.pending_skill_pick == Rules.Skill.NONE and _view.you.alive
+	_skill_row_node.visible = game_mode < Rules.Mode.ANQI
+	_ready_btn.visible = game_mode >= Rules.Mode.ANQI
+	_skill_desc_label.visible = game_mode < Rules.Mode.ANQI
 	_set_modal(_skill_modal, picking)
 	if picking:
-		_skill_pick_label.text = "报门户 —— 选一门技能（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
+		if game_mode >= Rules.Mode.ANQI:
+			_skill_pick_label.text = "选个皮囊，准备上桌（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
+		else:
+			_skill_pick_label.text = "报门户 —— 选一门技能（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
 	var swap_open: bool = gs.phase == Rules.Phase.SWAP_WINDOW \
 		and _view.you.alive and _view.you.skill == Rules.Skill.GAIXIAN and _view.you.skill_uses_left > 0
 	_set_modal(_swap_modal, swap_open)
@@ -1262,6 +1358,17 @@ func _event_text(e: Dictionary) -> String:
 		"ROUND_END": return "—— 本轮终了 ——"
 		"GAME_OVER": return "🏆 %s 独立绝顶！" % _nm(e.winner)
 		"EMOTE": return "%s：「%s」" % [_nm(e.pid), Rules.EMOTES[e.emote]]
+		"XINMO_TRIGGERED": return "心魔现身！%s 全身而退，其余诸人皆遭反噬！" % _nm(e.pid)
+		"DICE_ROUND_START": return "—— 第 %d 局暗器 · %s 先开口 ——" % [e.round, _nm(e.starter)]
+		"BID": return "%s 叫价：全场至少 %d 枚【%s】" % [_nm(e.pid), e.n, Rules.DICE_FACE_NAMES[e.face]]
+		"DICE_CHALLENGE": return "%s 断喝：开囊验数！" % _nm(e.by)
+		"DICE_REVEALED": return "清点：实有 %d 枚（含无影针）——叫价%s" % [e.count, "成立" if e.stands else "吹破了"]
+		"POISON_START": return "—— 五毒局开 · %s 先递 ——" % _nm(e.starter)
+		"OFFER_MADE": return "%s 递给 %s 一只毒盒：「这是%s。」" % [_nm(e["from"]), _nm(e.to), Rules.POISON_NAMES[e.claim]]
+		"PASSED_ON": return "%s 掀盖看了一眼，转手递给 %s：「这是%s。」" % [_nm(e["from"]), _nm(e.to), Rules.POISON_NAMES[e.claim]]
+		"OFFER_REVEALED": return "开盒！是【%s】——%s 吃下" % [Rules.POISON_NAMES[e.card], _nm(e.eater)]
+		"POISON_EATEN": return "%s 的【%s】已积 %d 只" % [_nm(e.pid), Rules.POISON_NAMES[e.kind], e.count]
+		"POISONED_OUT": return "%s 五内俱焚，毒发倒地！" % _nm(e.pid)
 	return str(e)
 
 
@@ -1350,6 +1457,21 @@ func _build_lobby() -> void:
 	_lobby_seats_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	_lobby_seats_row.add_theme_constant_override("separation", 18)
 	v.add_child(_lobby_seats_row)
+
+	var lm_row := HBoxContainer.new()
+	lm_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	lm_row.add_theme_constant_override("separation", 6)
+	_lobby_mode_label = Label.new()
+	_lobby_mode_label.add_theme_font_size_override("font_size", 15)
+	lm_row.add_child(_lobby_mode_label)
+	for mi in 4:
+		var mb := Button.new()
+		mb.text = Rules.MODE_NAMES[mi]
+		mb.focus_mode = Control.FOCUS_NONE
+		mb.pressed.connect(_on_lobby_mode.bind(mi))
+		lm_row.add_child(mb)
+		_lobby_mode_btns.append(mb)
+	v.add_child(lm_row)
 
 	_lobby_status = _mk_label(v, 15)
 	_lobby_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1486,6 +1608,11 @@ func _on_net_game(m: Dictionary) -> void:
 	if not _game_started_online:
 		_game_started_online = true
 		my_id = net.my_seat
+		game_mode = int(net.lobby.get("game_mode", 0)) if not net.lobby.is_empty() else 0
+		_hand_panel.tex_override = Art.poison_texes() if game_mode == Rules.Mode.DIDU else []
+		_hand_panel.max_select = 1 if game_mode == Rules.Mode.DIDU else Rules.MAX_PLAY_CARDS
+		_ready_btn.text = "准备"
+		_ready_btn.disabled = false
 		gs = _rgame
 		_intro_modal.visible = false
 		_lobby_modal.visible = false
@@ -1562,6 +1689,12 @@ func _refresh_lobby() -> void:
 		box.add_child(slot)
 		box.add_child(nm)
 		_lobby_seats_row.add_child(box)
+	var gm := int(L.get("game_mode", 0))
+	_lobby_mode_label.text = "玩法："
+	for i in _lobby_mode_btns.size():
+		_lobby_mode_btns[i].visible = true
+		_lobby_mode_btns[i].disabled = not is_host
+		_lobby_mode_btns[i].modulate = Color(1, 0.85, 0.4) if i == gm else Color(1, 1, 1)
 	_btn_addbot.visible = is_host and seats.size() < Rules.MAX_PLAYERS
 	_btn_rmbot.visible = is_host and seats.any(func(x): return bool(x.get("is_bot", false)))
 	_btn_start_online.visible = is_host
@@ -1776,3 +1909,381 @@ func _check_orientation() -> void:
 		return
 	var sz := get_viewport().get_visible_rect().size
 	_orient_overlay.visible = _touch and sz.y > sz.x
+
+
+# ============================================================
+# 多玩法（v1.0）：模式选择 / 暗器 / 递毒 驱动与 UI
+# ============================================================
+
+func _on_mode_pick(mi: int) -> void:
+	game_mode = mi
+	for i in _mode_btns.size():
+		_mode_btns[i].modulate = Color(1, 0.85, 0.4) if i == mi else Color(1, 1, 1)
+	var d := _intro_modal.find_child("ModeDesc", true, false)
+	if d != null:
+		d.text = Rules.MODE_DESCS[mi]
+
+
+func _on_lobby_mode(mi: int) -> void:
+	if net != null:
+		net.send({"t": "set_mode", "mode": mi})
+
+
+func _on_ready() -> void:
+	_apply({"type": "READY", "pid": my_id})
+	_ready_btn.text = "已准备，等待众人…"
+	_ready_btn.disabled = true
+
+
+# 暗器/递毒的报门户：只选皮囊 + 准备；10 秒超时强制开局
+func _tick_pick_simple(delta: float) -> void:
+	_skill_pick_left -= delta
+	if _skill_pick_left <= 0.0:
+		_apply_events(gs.force_resolve_skill_pick())
+
+
+# 暗器/递毒的出招驱动：机器人走各自内核的 bot_decide；真人超时代打
+func _tick_play_mode(delta: float) -> void:
+	var pid: int = gs.current_player
+	if pid < 0:
+		return
+	if _view.players[pid].is_bot:
+		if _bot_think_elapsed == 0.0:
+			_bot_think_time = _ui_rng.randf_range(BOT_THINK_MIN, BOT_THINK_MAX)
+		_bot_think_elapsed += delta
+		if _bot_think_elapsed >= _bot_think_time:
+			_bot_think_elapsed = 0.0
+			var bv: Dictionary = gs.view_for(pid)
+			if game_mode == Rules.Mode.ANQI:
+				_apply(GameDice.bot_decide(bv, _driver_rng))
+			else:
+				_apply(GamePoison.bot_decide(bv, _driver_rng))
+	else:
+		_turn_time_left -= delta
+		if _turn_time_left <= 0.0:
+			_turn_time_left = Rules.PLAY_TIMEOUT_SEC
+			var mv: Dictionary = gs.view_for(pid)
+			if game_mode == Rules.Mode.ANQI:
+				_apply(GameDice.bot_decide(mv, _driver_rng))
+			else:
+				_apply(GamePoison.bot_decide(mv, _driver_rng))
+
+
+# ---------- 暗器 UI ----------
+func _build_dice_zone(parent: HBoxContainer) -> void:
+	_dice_zone = HBoxContainer.new()
+	_dice_zone.add_theme_constant_override("separation", 14)
+	_dice_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dice_zone.alignment = BoxContainer.ALIGNMENT_CENTER
+	_dice_zone.visible = false
+	parent.add_child(_dice_zone)
+	parent.move_child(_dice_zone, 2)
+
+	_dice_row = HBoxContainer.new()
+	_dice_row.add_theme_constant_override("separation", 6)
+	_dice_zone.add_child(_dice_row)
+
+	var ctl := VBoxContainer.new()
+	ctl.add_theme_constant_override("separation", 6)
+	_dice_zone.add_child(ctl)
+	var nrow := HBoxContainer.new()
+	nrow.alignment = BoxContainer.ALIGNMENT_CENTER
+	nrow.add_theme_constant_override("separation", 8)
+	ctl.add_child(nrow)
+	var minus := Button.new()
+	minus.text = "－"
+	minus.custom_minimum_size = Vector2(44, 44)
+	minus.focus_mode = Control.FOCUS_NONE
+	minus.pressed.connect(func(): _set_dice_n(_dice_n - 1))
+	nrow.add_child(minus)
+	_dice_n_label = _mk_label(nrow, 22)
+	_dice_n_label.text = "1 枚"
+	var plus := Button.new()
+	plus.text = "＋"
+	plus.custom_minimum_size = Vector2(44, 44)
+	plus.focus_mode = Control.FOCUS_NONE
+	plus.pressed.connect(func(): _set_dice_n(_dice_n + 1))
+	nrow.add_child(plus)
+	var frow := HBoxContainer.new()
+	frow.alignment = BoxContainer.ALIGNMENT_CENTER
+	frow.add_theme_constant_override("separation", 4)
+	ctl.add_child(frow)
+	for f in Rules.DICE_BIDDABLE:
+		var fb := Button.new()
+		fb.text = Rules.DICE_FACE_NAMES[f]
+		fb.focus_mode = Control.FOCUS_NONE
+		fb.pressed.connect(_set_dice_face.bind(f))
+		frow.add_child(fb)
+		_dice_face_btns.append(fb)
+	_set_dice_face(0)
+
+
+func _set_dice_n(n: int) -> void:
+	_dice_n = clampi(n, 1, 20)
+	_dice_n_label.text = "%d 枚" % _dice_n
+
+
+func _set_dice_face(f: int) -> void:
+	_dice_face = f
+	for i in _dice_face_btns.size():
+		_dice_face_btns[i].modulate = Color(1, 0.85, 0.4) if Rules.DICE_BIDDABLE[i] == f else Color(1, 1, 1)
+
+
+func _on_bid() -> void:
+	_apply({"type": "BID", "pid": my_id, "n": _dice_n, "face": _dice_face})
+
+
+# ---------- 递毒 UI ----------
+func _build_poison_ctl(parent: HBoxContainer) -> void:
+	_poison_ctl = VBoxContainer.new()
+	_poison_ctl.add_theme_constant_override("separation", 6)
+	_poison_ctl.alignment = BoxContainer.ALIGNMENT_CENTER
+	_poison_ctl.visible = false
+	parent.add_child(_poison_ctl)
+
+	var crow := HBoxContainer.new()
+	crow.alignment = BoxContainer.ALIGNMENT_CENTER
+	crow.add_theme_constant_override("separation", 4)
+	_poison_ctl.add_child(crow)
+	for k in Rules.POISON_NAMES.size():
+		var cb := Button.new()
+		cb.text = Rules.POISON_NAMES[k]
+		cb.focus_mode = Control.FOCUS_NONE
+		cb.pressed.connect(_set_poison_claim.bind(k))
+		crow.add_child(cb)
+		_poison_claim_btns.append(cb)
+	_poison_target_box = HBoxContainer.new()
+	_poison_target_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_poison_target_box.add_theme_constant_override("separation", 4)
+	_poison_ctl.add_child(_poison_target_box)
+	var arow := HBoxContainer.new()
+	arow.alignment = BoxContainer.ALIGNMENT_CENTER
+	arow.add_theme_constant_override("separation", 8)
+	_poison_ctl.add_child(arow)
+	_btn_offer = Button.new()
+	_btn_offer.text = "递出"
+	_btn_offer.custom_minimum_size = Vector2(110, 46)
+	_btn_offer.add_theme_font_size_override("font_size", 19)
+	_btn_offer.pressed.connect(_on_offer)
+	arow.add_child(_btn_offer)
+	_btn_believe = Button.new()
+	_btn_believe.text = "信了"
+	_btn_believe.custom_minimum_size = Vector2(90, 46)
+	_btn_believe.add_theme_font_size_override("font_size", 19)
+	_btn_believe.pressed.connect(func(): _apply({"type": "RESPOND", "pid": my_id, "guess": true}))
+	arow.add_child(_btn_believe)
+	_btn_doubt = Button.new()
+	_btn_doubt.text = "不信"
+	_btn_doubt.custom_minimum_size = Vector2(90, 46)
+	_btn_doubt.add_theme_font_size_override("font_size", 19)
+	_btn_doubt.pressed.connect(func(): _apply({"type": "RESPOND", "pid": my_id, "guess": false}))
+	arow.add_child(_btn_doubt)
+	_btn_passon = Button.new()
+	_btn_passon.text = "转赠"
+	_btn_passon.custom_minimum_size = Vector2(90, 46)
+	_btn_passon.add_theme_font_size_override("font_size", 19)
+	_btn_passon.pressed.connect(_on_passon_toggle)
+	arow.add_child(_btn_passon)
+
+
+func _set_poison_claim(k: int) -> void:
+	_poison_claim = k
+	for i in _poison_claim_btns.size():
+		_poison_claim_btns[i].modulate = Color(1, 0.85, 0.4) if i == k else Color(1, 1, 1)
+
+
+func _set_poison_target(t: int) -> void:
+	_poison_target = t
+	for c in _poison_target_box.get_children():
+		c.modulate = Color(1, 0.85, 0.4) if int(c.get_meta("pid", -1)) == t else Color(1, 1, 1)
+
+
+func _refresh_poison_targets(exclude_seen: bool) -> void:
+	for c in _poison_target_box.get_children():
+		c.free()
+	var seen: Array = _view.get("offer_seen", []) if exclude_seen else []
+	for p in _view.players:
+		var qid := int(p.id)
+		if qid == my_id or not bool(p.alive):
+			continue
+		if exclude_seen and seen.has(qid):
+			continue
+		var tb := Button.new()
+		tb.text = "递给 " + str(p.name)
+		tb.focus_mode = Control.FOCUS_NONE
+		tb.set_meta("pid", qid)
+		tb.pressed.connect(_set_poison_target.bind(qid))
+		_poison_target_box.add_child(tb)
+
+
+func _on_offer() -> void:
+	var sel: Array = _hand_panel.selected_indices()
+	if sel.size() != 1 or _poison_target < 0:
+		_narration.text = "先选一张毒物、一个声称、一个目标"
+		return
+	_apply({"type": "OFFER", "pid": my_id, "card_index": sel[0],
+		"target": _poison_target, "claim": _poison_claim})
+	_poison_target = -1
+
+
+func _on_passon_toggle() -> void:
+	_passon_mode = true
+	_refresh_poison_targets(true)
+	_narration.text = "转赠：选个声称和一个没看过的人"
+
+
+func _confirm_passon() -> void:
+	if _poison_target < 0:
+		return
+	_apply({"type": "PASS_ON", "pid": my_id, "claim": _poison_claim, "target": _poison_target})
+	_passon_mode = false
+	_poison_target = -1
+
+
+func _refresh_mode_ui() -> void:
+	pass  # 预留：模式级 UI 开关统一处（当前由各 refresh 分支自理）
+
+
+func _refresh_stage_lunzhao() -> void:
+	var sig := ""
+	if not _reveal_cards.is_empty():
+		sig = "R%s|%d" % [str(_reveal_cards), _reveal_pid]
+		_claim_label.text = "%s 的招亮出真章 —— %s" % [_names[_reveal_pid], "句句是真" if _reveal_honest else "虚招被识破！"]
+	elif _view.last_played_count > 0 and _view.last_player_who_played >= 0:
+		sig = "B%d|%d" % [_view.last_played_count, _view.last_player_who_played]
+		_claim_label.text = "%s 押下 %d 式，声称皆是【%s】" % [
+			_names[_view.last_player_who_played], _view.last_played_count, Rules.SUIT_NAMES[_view.current_suit]]
+	else:
+		_claim_label.text = "本轮尚未有人出招" if gs.phase == Rules.Phase.PLAY else ""
+	if sig != _stage_sig:
+		_stage_sig = sig
+		for c in _stage_cards.get_children():
+			c.free()
+		if not _reveal_cards.is_empty():
+			# 逐张"翻牌"：横向 0→1 展开，错峰
+			for i in _reveal_cards.size():
+				var card := _mk_stage_card(Art.card_tex(_reveal_cards[i]), _reveal_cards[i])
+				card.pivot_offset = Vector2(48, 72)
+				card.scale = Vector2(0.0, 1.0)
+				_stage_cards.add_child(card)
+				var tw := card.create_tween()
+				tw.tween_interval(0.13 * i)
+				tw.tween_property(card, "scale", Vector2.ONE, 0.16) \
+					.set_ease(Tween.EASE_OUT)
+		elif _view.last_played_count > 0 and _view.last_player_who_played >= 0:
+			# 牌背弹入：缩放 + 淡入错峰
+			for i in _view.last_played_count:
+				var back := _mk_stage_card(Art.card_back_tex(), -1)
+				back.pivot_offset = Vector2(48, 72)
+				back.scale = Vector2(0.55, 0.55)
+				back.modulate.a = 0.0
+				_stage_cards.add_child(back)
+				var tw := back.create_tween().set_parallel(true)
+				tw.tween_property(back, "scale", Vector2.ONE, 0.2) \
+					.set_delay(0.06 * i).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+				tw.tween_property(back, "modulate:a", 1.0, 0.15).set_delay(0.06 * i)
+
+
+func _refresh_stage_dice() -> void:
+	for c in _stage_cards.get_children():
+		c.free()
+	_stage_sig = "dice"
+	if int(_view.get("bid_by", -1)) != -1:
+		_claim_label.text = "%s 叫价：全场至少 %d 枚 【%s】" % [
+			_names.get(int(_view.bid_by), "?"), int(_view.bid_n),
+			Rules.DICE_FACE_NAMES[int(_view.bid_face)]]
+	elif gs.phase == Rules.Phase.PLAY:
+		_claim_label.text = "本轮尚无人叫价——%s 先开口" % _names.get(int(_view.current_player), "?")
+	else:
+		_claim_label.text = ""
+
+
+func _refresh_stage_poison() -> void:
+	for c in _stage_cards.get_children():
+		c.free()
+	_stage_sig = "poison"
+	if bool(_view.get("offer_active", false)):
+		var box := _mk_stage_card(Art.poison_box_tex(), -1)
+		_stage_cards.add_child(box)
+		var to_me: bool = int(_view.offer_to) == my_id
+		var base := "%s 递给 %s 一只毒盒，声称是【%s】" % [
+			_names.get(int(_view.offer_from), "?"), _names.get(int(_view.offer_to), "?"),
+			Rules.POISON_NAMES[int(_view.offer_claim)]]
+		if to_me and int(_view.you.get("peeked", -1)) >= 0:
+			base += "　（你窥见的其实是【%s】）" % Rules.POISON_NAMES[int(_view.you.peeked)]
+		_claim_label.text = base
+	elif gs.phase == Rules.Phase.PLAY:
+		_claim_label.text = "轮到 %s 递毒" % _names.get(int(_view.current_player), "?")
+	else:
+		_claim_label.text = ""
+
+
+func _refresh_bottom_dice() -> void:
+	_hand_panel.visible = false
+	_poison_ctl.visible = false
+	_dice_zone.visible = _view.you.alive and gs.phase == Rules.Phase.PLAY
+	_bottom_zone.visible = _view.you.alive and gs.phase != Rules.Phase.SKILL_PICK
+	_emote_bar.visible = _bottom_zone.visible
+	# 我的骰盅
+	var mine: Array = _view.you.get("dice", [])
+	if _dice_row.get_child_count() != mine.size() or _stage_sig != "dice_r%d" % _view.round_number:
+		_stage_sig = "dice_r%d" % _view.round_number
+		for c in _dice_row.get_children():
+			c.free()
+		for d in mine:
+			var tr := TextureRect.new()
+			tr.custom_minimum_size = Vector2(52, 52)
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			var tex: Texture2D = Art.dice_tex(int(d))
+			if tex != null:
+				tr.texture = tex
+			else:
+				var lb := Label.new()
+				lb.text = Rules.DICE_FACE_NAMES[int(d)]
+				lb.add_theme_font_size_override("font_size", 13)
+				tr.add_child(lb)
+			_dice_row.add_child(tr)
+	var my_turn: bool = gs.phase == Rules.Phase.PLAY and int(_view.current_player) == my_id
+	_play_button.text = "叫价"
+	_play_button.visible = true
+	_play_button.disabled = not my_turn
+	_challenge_button.disabled = not (my_turn and int(_view.get("bid_by", -1)) != -1 \
+		and int(_view.bid_by) != my_id)
+	_skill_button.visible = false
+
+
+func _refresh_bottom_poison() -> void:
+	_dice_zone.visible = false
+	_bottom_zone.visible = _view.you.alive and gs.phase != Rules.Phase.SKILL_PICK
+	_emote_bar.visible = _bottom_zone.visible
+	var hand: Array = _view.you.hand
+	if str(hand) != str(_hand_snapshot):
+		_hand_snapshot = hand.duplicate()
+		_hand_panel.set_hand(hand)
+	_hand_panel.visible = gs.phase == Rules.Phase.PLAY
+	var offering: bool = gs.phase == Rules.Phase.PLAY and not bool(_view.get("offer_active", false)) \
+		and int(_view.current_player) == my_id and hand.size() > 0
+	var receiving: bool = gs.phase == Rules.Phase.PLAY and bool(_view.get("offer_active", false)) \
+		and int(_view.offer_to) == my_id
+	_poison_ctl.visible = offering or receiving
+	_play_button.visible = false
+	_challenge_button.visible = false
+	_skill_button.visible = false
+	if offering:
+		_btn_offer.visible = not _passon_mode
+		_btn_believe.visible = false
+		_btn_doubt.visible = false
+		_btn_passon.visible = false
+		if _poison_target_box.get_child_count() == 0:
+			_refresh_poison_targets(false)
+	elif receiving:
+		var can_pass := false
+		for a in _view.legal_actions:
+			if a.get("type", "") == "PASS_ON":
+				can_pass = true
+		_btn_offer.visible = _passon_mode
+		_btn_offer.text = "确认转赠" if _passon_mode else "递出"
+		_btn_believe.visible = not _passon_mode
+		_btn_doubt.visible = not _passon_mode
+		_btn_passon.visible = can_pass and not _passon_mode

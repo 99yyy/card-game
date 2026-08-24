@@ -65,10 +65,20 @@ static func decide(view: Dictionary, rng: RandomNumberGenerator) -> Dictionary:
 			return {"type": "CHALLENGE", "pid": me.id}
 
 	# ---- 出牌 ----
+	# 心魔（若在手中）：三成概率单独打出，否则多张组合里绝不混它（只能单出）
+	var xinmo_at := -1
+	for xi in me.hand.size():
+		if me.hand[xi] == Rules.SUIT_XINMO:
+			xinmo_at = xi
+			break
+	if xinmo_at >= 0 and rng.randf() < 0.3:
+		return {"type": "PLAY", "pid": me.id, "indices": [xinmo_at]}
 	var truths := []
 	for i in me.hand.size():
 		if me.hand[i] == view.current_suit or me.hand[i] == Rules.Suit.HUAJIN:
 			truths.append(i)
+	if truths.is_empty() and xinmo_at >= 0:
+		return {"type": "PLAY", "pid": me.id, "indices": [xinmo_at]}
 	if truths.size() >= 1:
 		var r := rng.randf()
 		var n := 1 if r < 0.60 else (2 if r < 0.90 else 3)

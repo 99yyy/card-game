@@ -6,6 +6,8 @@ import * as R from "./core/rules.js";
 import { Rng } from "./core/rng.js";
 import { Game } from "./core/game.js";
 import { botDecide } from "./core/bot.js";
+import { GameDice, diceBotDecide } from "./core/game_dice.js";
+import { GamePoison, poisonBotDecide } from "./core/game_poison.js";
 
 const MAX_SEATS = R.MAX_PLAYERS;
 
@@ -20,6 +22,8 @@ export class Room {
     this.timers = { turn: null, bot: null, pick: null, swap: null };
     this.turnDeadline = 0;            // epoch ms，随状态广播
     this.roomCode = "";
+    this.gameMode = 0;                // Rules.Mode：0 论招 1 心魔 2 暗器 3 递毒
+    this._pickArmed = "";
   }
 
   // ---------- HTTP/WS 入口 ----------
@@ -111,6 +115,12 @@ export class Room {
         this._broadcastLobby();
         break;
       }
+      case "set_mode": {
+        if (this._hostSeat() !== seat || this.mode !== "lobby") return;
+        const md = m.mode | 0;
+        if (md >= 0 && md <= 3) { this.gameMode = md; this._broadcastLobby(); }
+        break;
+      }
       case "start":
         if (this._hostSeat() !== seat || this.mode !== "lobby") return;
         if (!this._canStart()) return;
@@ -147,6 +157,7 @@ export class Room {
         seat: s.seat, name: s.name, is_bot: s.isBot, connected: s.connected,
       })),
       host: host ? host.seat : -1,
+      game_mode: this.gameMode,
       can_start: this._canStart(),
       min_players: R.MIN_PLAYERS, max_players: MAX_SEATS,
     };
@@ -157,7 +168,10 @@ export class Room {
   _startGame(skillsEnabled) {
     this.mode = "playing";
     const seed = (Date.now() ^ (Math.random() * 0x7fffffff)) >>> 0;
-    this.game = new Game(seed, skillsEnabled);
+    // 模式工厂（多玩法方案 §4）
+    if (this.gameMode === 2) this.game = new GameDice(seed);
+    else if (this.gameMode === 3) this.game = new GamePoison(seed);
+    else this.game = new Game(seed, skillsEnabled, this.gameMode === 1);
     const evs = this.game.newGame(this.seats.map(s => s.name), this.seats.map(s => s.isBot));
     this._broadcastLobby();
     this._pushGameAll(evs);
@@ -221,19 +235,22 @@ export class Room {
     this._clearTimers();
     const g = this.game;
     if (g.phase === R.Phase.SKILL_PICK) {
-      this.turnDeadline = Date.now() + R.SKILL_PICK_MS;
+      const pickMs = this.gameMode >= 2 ? 10000 : R.SKILL_PICK_MS;
+      this.turnDeadline = Date.now() + pickMs;
       this.timers.pick = setTimeout(() => {
         const evs = g.forceResolveSkillPick();
         this._pushGameAll(evs);
         this._armPhaseTimers();
         this._maybeBotAct();
-      }, R.SKILL_PICK_MS);
-      // 机器人立刻随机选
-      for (const s of this.seats)
-        if (s.isBot) g.apply({ type: "PICK_SKILL", pid: s.seat, skill: this.driverRng.randiRange(0, 5) });
-      if (g.phase !== R.Phase.SKILL_PICK) {  // 全是机器人时可能已裁决
-        this._pushGameAll([]);
-        this._armPhaseTimers();
+      }, pickMs);
+      if (this.gameMode <= 1) {
+        // 论招/心魔：机器人立刻随机选技能
+        for (const s of this.seats)
+          if (s.isBot) g.apply({ type: "PICK_SKILL", pid: s.seat, skill: this.driverRng.randiRange(0, 5) });
+        if (g.phase !== R.Phase.SKILL_PICK) {
+          this._pushGameAll([]);
+          this._armPhaseTimers();
+        }
       }
       return;
     }
@@ -256,6 +273,16 @@ export class Room {
   _timeoutPlay() {
     const g = this.game;
     if (!g || g.phase !== R.Phase.PLAY) return;
+    const cp = g.currentPlayer;
+    if (this.gameMode === 2) {
+      // 暗器：超时按机器人策略代打（保证必有合法动作）
+      this._applyAndBroadcast(diceBotDecide(g.viewFor(cp), this.driverRng));
+      return;
+    }
+    if (this.gameMode === 3) {
+      this._applyAndBroadcast(poisonBotDecide(g.viewFor(cp), this.driverRng));
+      return;
+    }
     const p = g.players[g.currentPlayer];
     if (p.hand.length > 0) {
       const idx = this.driverRng.randiRange(0, p.hand.length - 1);
@@ -266,7 +293,7 @@ export class Room {
   _maybeBotAct() {
     const g = this.game;
     if (!g || this.mode !== "playing") return;
-    if (g.phase === R.Phase.SWAP_WINDOW) {
+    if (g.phase === R.Phase.SWAP_WINDOW && this.gameMode <= 1) {
       const holder = g.players.find(p => p.alive && p.skill === R.Skill.GAIXIAN && p.skillUsesLeft > 0);
       const hs = holder ? this.seats[holder.id] : null;
       const botHolder = hs && (hs.isBot || !hs.connected);
@@ -290,7 +317,11 @@ export class Room {
     const think = this.driverRng.randiRange(R.BOT_THINK_MIN_MS, R.BOT_THINK_MAX_MS);
     this.timers.bot = setTimeout(() => {
       if (g.phase !== R.Phase.PLAY || g.currentPlayer !== cp) return;
-      this._applyAndBroadcast(botDecide(g.viewFor(cp), this.driverRng));
+      let act;
+      if (this.gameMode === 2) act = diceBotDecide(g.viewFor(cp), this.driverRng);
+      else if (this.gameMode === 3) act = poisonBotDecide(g.viewFor(cp), this.driverRng);
+      else act = botDecide(g.viewFor(cp), this.driverRng);
+      this._applyAndBroadcast(act);
     }, think);
   }
 
