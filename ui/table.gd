@@ -18,6 +18,9 @@ extends Control
 
 const NC := preload("res://ui/net_client.gd")
 
+# 触屏设备：加大点击目标（手机横屏优化）
+var _touch := false
+
 # 本座位号：单机恒 0；联机 = 服务端分配的 seat
 var my_id := 0
 var online := false
@@ -126,10 +129,14 @@ var _opp_panels: Dictionary = {}   # pid -> panel（不含自己）
 
 func _ready() -> void:
 	_ui_rng.randomize()
+	_touch = DisplayServer.is_touchscreen_available()
 	_build_ui()
 	_build_intro()
 	_build_lobby()
 	_build_skill_target_modals()
+	_build_orientation_overlay()
+	get_viewport().size_changed.connect(_check_orientation)
+	_check_orientation()
 	# 先看玩法介绍，点「开始对局」才发牌（用户反馈：需要开场白）
 	for n in _hud_nodes:
 		n.visible = false
@@ -270,7 +277,9 @@ func _build_ui() -> void:
 		var b := Button.new()
 		b.text = Rules.EMOTES[i]
 		b.focus_mode = Control.FOCUS_NONE
-		b.add_theme_font_size_override("font_size", 14)
+		if _touch:
+			b.custom_minimum_size = Vector2(60, 44)
+		b.add_theme_font_size_override("font_size", 17 if _touch else 14)
 		b.pressed.connect(_on_emote.bind(i))
 		_emote_bar.add_child(b)
 	_hud_nodes.append(_emote_bar)
@@ -317,7 +326,7 @@ func _build_ui() -> void:
 	sv.add_child(srow)
 	for i in Rules.ALL_SKILLS:
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(104, 118)
+		b.custom_minimum_size = Vector2(118, 138) if _touch else Vector2(104, 118)
 		b.focus_mode = Control.FOCUS_NONE
 		b.pressed.connect(_on_pick_skill.bind(i))
 		b.mouse_entered.connect(_on_skill_hover.bind(i))
@@ -540,9 +549,9 @@ func _mk_label(parent: Node, size: int) -> Label:
 func _mk_action_button(parent: Node, text: String) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(150, 48)
+	b.custom_minimum_size = Vector2(200, 68) if _touch else Vector2(150, 48)
 	b.focus_mode = Control.FOCUS_NONE
-	b.add_theme_font_size_override("font_size", 20)
+	b.add_theme_font_size_override("font_size", 24 if _touch else 20)
 	# 清晰的描边按钮（木纹贴图在暗底上几乎不可见，弃用）
 	var sb_n := _flat_style(Color(0.16, 0.13, 0.09, 0.95), 6, 10, 6)
 	sb_n.border_color = Color(0.78, 0.64, 0.35)
@@ -1627,3 +1636,38 @@ func _show_listen_modal() -> void:
 func _on_listen_pick(pos: int) -> void:
 	_listen_modal.visible = false
 	_apply(Action.use_tingjin(my_id, pos))
+
+
+# ============================================================
+# 手机竖屏提示（横屏优化的一部分：竖屏没法排开牌桌）
+# ============================================================
+
+var _orient_overlay: Control
+
+func _build_orientation_overlay() -> void:
+	_orient_overlay = Control.new()
+	_orient_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_orient_overlay.visible = false
+	_orient_overlay.z_index = 100
+	var bg := ColorRect.new()
+	bg.color = Color(0.02, 0.03, 0.05, 0.97)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_orient_overlay.add_child(bg)
+	var v := VBoxContainer.new()
+	v.set_anchors_preset(Control.PRESET_CENTER)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 16)
+	_orient_overlay.add_child(v)
+	var l := Label.new()
+	l.text = "请把手机横过来\n\n绝顶之上，须得横刀立马"
+	l.add_theme_font_size_override("font_size", 30)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(l)
+	add_child(_orient_overlay)
+
+
+func _check_orientation() -> void:
+	if _orient_overlay == null:
+		return
+	var sz := get_viewport().get_visible_rect().size
+	_orient_overlay.visible = _touch and sz.y > sz.x
