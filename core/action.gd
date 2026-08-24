@@ -3,6 +3,9 @@ extends RefCounted
 
 # 动作构造。校验与推进在 GameState 里（§7.2 用同一份 _is_legal）。
 
+static func pick_char(pid: int, char_id: int) -> Dictionary:
+	return {"type": "PICK_CHAR", "pid": pid, "char_id": char_id}
+
 static func pick_skill(pid: int, skill: int) -> Dictionary:
 	return {"type": "PICK_SKILL", "pid": pid, "skill": skill}
 

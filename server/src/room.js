@@ -174,6 +174,18 @@ export class Room {
       return;
     }
     this._pushGameAll(evs);
+    // 机器人看戏：亮招后当事机器人有概率发表情（真招冷笑 / 虚招被拆摇头）
+    const rev = evs.find(e => e.type === "REVEALED");
+    if (rev != null && this.game.phase !== R.Phase.GAME_OVER) {
+      const s = this.seats[rev.pid];
+      if (s && s.isBot && this.driverRng.randf() < 0.4) {
+        const emote = rev.honest ? 0 : 3;
+        setTimeout(() => {
+          if (this.mode === "playing" && this.game)
+            this._pushGameAll(this.game.apply({ type: "EMOTE", pid: rev.pid, emote }));
+        }, 900);
+      }
+    }
     if (this.game.phase === R.Phase.GAME_OVER) {
       this.mode = "over";
       this._clearTimers();

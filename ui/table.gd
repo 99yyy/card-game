@@ -126,6 +126,7 @@ var _hud_nodes: Array = []      # 开局前隐藏的 HUD（顶栏/日志/表情/
 
 var _opp_panels: Dictionary = {}   # pid -> panel（不含自己）
 var _lobby_prev_seats := 0         # 入座动画：检测新落座
+var _char_btns: Array = []         # 报门户选皮囊按钮（高亮当前选择）
 
 
 func _ready() -> void:
@@ -322,6 +323,36 @@ func _build_ui() -> void:
 	sp.add_child(sv)
 	_skill_pick_label = _mk_label(sv, 22)
 	_skill_pick_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# 选皮囊行：六位侠士自由挑，可与他人重复（v0.9）
+	var chint := _mk_label(sv, 14)
+	chint.text = "选个皮囊 ——"
+	chint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chint.modulate = Color(0.8, 0.78, 0.68)
+	var crow := HBoxContainer.new()
+	crow.alignment = BoxContainer.ALIGNMENT_CENTER
+	crow.add_theme_constant_override("separation", 8)
+	sv.add_child(crow)
+	for ci in 6:
+		var cb := Button.new()
+		cb.custom_minimum_size = Vector2(76, 108)
+		cb.flat = true
+		cb.focus_mode = Control.FOCUS_NONE
+		cb.pressed.connect(_on_pick_char.bind(ci))
+		var ctr := TextureRect.new()
+		ctr.set_anchors_preset(Control.PRESET_FULL_RECT)
+		ctr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		ctr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		ctr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ctex := Art.load_tex("res://assets/chars/char_%s_%d.png" % [Art.CHAR_NAMES[ci], Art.CHAR_PICKS[ci]])
+		if ctex != null:
+			ctr.texture = ctex
+		cb.add_child(ctr)
+		crow.add_child(cb)
+		_char_btns.append(cb)
+	var shint := _mk_label(sv, 14)
+	shint.text = "再选一门技能 ——"
+	shint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	shint.modulate = Color(0.8, 0.78, 0.68)
 	var srow := HBoxContainer.new()
 	srow.add_theme_constant_override("separation", 10)
 	sv.add_child(srow)
@@ -356,7 +387,7 @@ func _build_ui() -> void:
 	_skill_desc_label = _mk_label(sv, 15)
 	_skill_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_skill_desc_label.modulate = Color(0.85, 0.82, 0.7)
-	_skill_desc_label.text = "移到技能上查看说明；同名技能全场唯一，抢选冲突随机裁决"
+	_skill_desc_label.text = "移到技能上查看说明；技能可与他人重复，各选各的"
 
 	# ---- 改弦弹层 ----
 	_swap_modal = CenterContainer.new()
@@ -497,7 +528,7 @@ func _build_intro() -> void:
 [color=#e8c08c]③[/color] 每人背后六块石板，[b]其中一块是虚的[/b]，位置无人知晓。退到虚石 → 坠崖出局。退得越多越危险（1/6 → 1/5 → … → 必坠）。
 [color=#e8c08c]④[/color] 最后还站在崖顶的人赢。
 
-[b][color=#e8c08c]盘外招[/color][/b]　开局各选一门技能，人人不同、全场公开：
+[b][color=#e8c08c]盘外招[/color][/b]　开局自选皮囊与技能（技能可与他人重复），全场公开：
 金钟罩·免死一次　听劲·偷看上家一张　藏拙·读条造假　后发制人·冤枉我者多退一步　改弦·改路数　辨虚实·探一块石板"""
 	v.add_child(rt)
 
@@ -796,6 +827,18 @@ func _apply_events(events: Array) -> void:
 
 
 # 演出：全屏闪光 + 玩家面板弹跳
+# 机器人看戏：亮招后当事机器人有概率发表情（真招得意冷笑 / 虚招被拆摇头）
+func _maybe_bot_emote(e: Dictionary) -> void:
+	var pid := int(e.pid)
+	if pid < 0 or pid >= _view.players.size():
+		return
+	if not bool(_view.players[pid].is_bot):
+		return
+	if _ui_rng.randf() < 0.4:
+		var emote := 0 if bool(e.honest) else 3    # 冷笑 / 摇头
+		_apply(Action.emote(pid, emote))
+
+
 func _react(pid: int, kind: String) -> void:
 	var panel: Control = _my_panel if pid == my_id else _opp_panels.get(pid)
 	if panel != null and panel.has_method("react"):
@@ -884,6 +927,8 @@ func _on_event_popped(e: Dictionary) -> void:
 			_reveal_cards = e.cards.duplicate()
 			_reveal_honest = e.honest
 			_reveal_pid = e.pid
+			if not online:
+				_maybe_bot_emote(e)
 		"RETREAT":
 			_flash(Color(0.9, 0.1, 0.1), 0.22)
 			_punch(int(e.pid))
@@ -894,7 +939,7 @@ func _on_event_popped(e: Dictionary) -> void:
 			var fp: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
 			if fp != null and fp.has_method("shake"):
 				fp.shake()
-				fp.play_fall_anim(int(e.pid))   # 逐帧挣扎 + 程序旋转跌落叠加
+				fp.play_fall_anim()             # 逐帧挣扎 + 程序旋转跌落叠加
 			_react(int(e.pid), "fall")
 		"GOLDEN_BELL":
 			_flash(Color(1.0, 0.82, 0.3), 0.35)
@@ -911,7 +956,7 @@ func _on_event_popped(e: Dictionary) -> void:
 			if ep != null:
 				ep.flash_emote(Rules.EMOTES[e.emote])
 				if ep.has_method("play_emote_anim"):
-					ep.play_emote_anim(int(e.pid), int(e.emote))
+					ep.play_emote_anim(int(e.emote))
 		"SKILL_USED":
 			# 私有结果提示（只有自己的视图里才有）
 			if int(e.pid) == my_id:
@@ -965,6 +1010,14 @@ func _on_pass_window() -> void:
 
 func _on_swap_suit(s: int) -> void:
 	_apply(Action.use_gaixian(my_id, s))
+
+
+func _on_pick_char(ci: int) -> void:
+	if gs != null and gs.phase == Rules.Phase.SKILL_PICK:
+		_apply(Action.pick_char(my_id, ci))
+		for i in _char_btns.size():
+			_char_btns[i].modulate = Color(1, 0.85, 0.4) if i == ci else Color(1, 1, 1)
+			_char_btns[i].scale = Vector2(1.06, 1.06) if i == ci else Vector2.ONE
 
 
 func _on_pick_skill(s: int) -> void:

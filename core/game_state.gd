@@ -94,6 +94,7 @@ func _make_player(id: int, pname: String, bot: bool) -> Dictionary:
 		"probe_result": {},          # {"3": true}
 		"listen_result": {},         # {"7": 0} 按轮号 key
 		"pending_skill_pick": Rules.Skill.NONE,
+		"char_id": id,               # 皮囊（立绘），报门户阶段可自选，纯外观
 	}
 
 # ---------- 动作入口 ----------
@@ -110,6 +111,9 @@ func apply(action: Dictionary) -> Array:
 		_emit({"type": "REJECTED", "reason": _reject_reason(a), "action": a})
 		return _pending_events
 	match t:
+		"PICK_CHAR":
+			var p0: Dictionary = _players[a.pid]
+			p0.char_id = a.char_id
 		"PICK_SKILL":
 			var p: Dictionary = _players[a.pid]
 			p.pending_skill_pick = a.skill
@@ -158,6 +162,9 @@ func _is_legal(a: Dictionary) -> bool:
 		return false
 	var p: Dictionary = _players[pid]
 	match t:
+		"PICK_CHAR":
+			var c: int = a.get("char_id", -1)
+			return phase == Rules.Phase.SKILL_PICK and c >= 0 and c <= 5
 		"PICK_SKILL":
 			return skills_enabled \
 				and phase == Rules.Phase.SKILL_PICK \
@@ -222,6 +229,9 @@ func _reject_reason(a: Dictionary) -> String:
 		return "bad_pid"
 	var p: Dictionary = _players[pid]
 	match t:
+		"PICK_CHAR":
+			if phase != Rules.Phase.SKILL_PICK: return "wrong_phase"
+			return "bad_char"
 		"PICK_SKILL":
 			if not skills_enabled: return "skills_off"
 			if phase != Rules.Phase.SKILL_PICK: return "wrong_phase"
@@ -457,48 +467,14 @@ func _next_alive(from_id: int) -> int:
 
 # ---------- 技能裁决（§11.3 / 坑 4）----------
 func _resolve_skill_pick() -> void:
-	var by_skill := {}
-	var losers := []
+	# v0.9：技能自由选、可重复。选了什么就是什么；超时未选者随机分配。
+	var assignments := {}
+	var randomized := []
 	for p in _players:
 		var s: int = p.pending_skill_pick
 		if s == Rules.Skill.NONE:
-			losers.append(p.id)
-		else:
-			if not by_skill.has(s):
-				by_skill[s] = []
-			by_skill[s].append(p.id)
-
-	var taken := {}
-	var skills_sorted := by_skill.keys()
-	skills_sorted.sort()
-	for s in skills_sorted:
-		var claimants: Array = by_skill[s]
-		claimants.sort()
-		var winner_idx := _rng.randi_range(0, claimants.size() - 1)
-		var w: int = claimants[winner_idx]
-		taken[s] = w
-		for c in claimants:
-			if c != w:
-				losers.append(c)
-
-	var remaining := []
-	for s in Rules.ALL_SKILLS:
-		if not taken.has(s):
-			remaining.append(s)
-
-	losers.sort()
-	_shuffle(losers)
-	var randomized := []
-	for pid in losers:
-		var idx := _rng.randi_range(0, remaining.size() - 1)
-		var s: int = remaining[idx]
-		remaining.remove_at(idx)
-		taken[s] = pid
-		randomized.append(pid)
-
-	var assignments := {}
-	for s in taken:
-		var p: Dictionary = _players[taken[s]]
+			s = Rules.ALL_SKILLS[_rng.randi_range(0, Rules.ALL_SKILLS.size() - 1)]
+			randomized.append(p.id)
 		p.skill = s
 		p.skill_uses_left = Rules.SKILL_USES[s]
 		p.houfa_ready_round = 0
@@ -548,6 +524,7 @@ func view_for(pid: int) -> Dictionary:
 			"steps_taken": p.steps_taken,
 			"has_gap": p.has_gap,
 			"golden_bell_used": p.golden_bell_used,
+			"char_id": p.char_id,
 		})
 	return {
 		"you": you,

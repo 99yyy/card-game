@@ -34,6 +34,7 @@ export class Game {
       skill: R.Skill.NONE, skillUsesLeft: 0, houfaReadyRound: 0,
       stepsTaken: 0, hollowIndex: 0, hasGap: false, goldenBellUsed: false,
       probeResult: {}, listenResult: {}, pendingSkillPick: R.Skill.NONE,
+      charId: i,   // 皮囊（立绘），报门户阶段可自选，纯外观
     }));
     for (const p of this.players) p.hollowIndex = this.rng.randiRange(1, R.STONES);
     this.roundStarter = this.rng.randiRange(0, n - 1);
@@ -59,6 +60,7 @@ export class Game {
     }
     const p = this.players[a.pid];
     switch (t) {
+      case "PICK_CHAR": p.charId = a.char_id; break;
       case "PICK_SKILL": p.pendingSkillPick = a.skill; break;
       case "USE_GAIXIAN": {
         p.skillUsesLeft -= 1;
@@ -99,6 +101,10 @@ export class Game {
     if (pid < 0 || pid >= this.players.length) return false;
     const p = this.players[pid];
     switch (t) {
+      case "PICK_CHAR": {
+        const c = a.char_id ?? -1;
+        return this.phase === R.Phase.SKILL_PICK && c >= 0 && c <= 5;
+      }
       case "PICK_SKILL":
         return this.skillsEnabled && this.phase === R.Phase.SKILL_PICK
           && p.pendingSkillPick === R.Skill.NONE && R.ALL_SKILLS.includes(a.skill ?? R.Skill.NONE);
@@ -143,6 +149,9 @@ export class Game {
     if (pid < 0 || pid >= this.players.length) return "bad_pid";
     const p = this.players[pid];
     switch (t) {
+      case "PICK_CHAR":
+        if (this.phase !== R.Phase.SKILL_PICK) return "wrong_phase";
+        return "bad_char";
       case "PICK_SKILL":
         if (!this.skillsEnabled) return "skills_off";
         if (this.phase !== R.Phase.SKILL_PICK) return "wrong_phase";
@@ -344,36 +353,15 @@ export class Game {
 
   // ---------- 技能裁决（键先排序再随机，保可复现）----------
   _resolveSkillPick() {
-    const bySkill = new Map();
-    const losers = [];
-    for (const p of this.players) {
-      const s = p.pendingSkillPick;
-      if (s === R.Skill.NONE) losers.push(p.id);
-      else {
-        if (!bySkill.has(s)) bySkill.set(s, []);
-        bySkill.get(s).push(p.id);
-      }
-    }
-    const taken = new Map();
-    for (const s of [...bySkill.keys()].sort((a, b) => a - b)) {
-      const claimants = bySkill.get(s).sort((a, b) => a - b);
-      const w = claimants[this.rng.randiRange(0, claimants.length - 1)];
-      taken.set(s, w);
-      for (const c of claimants) if (c !== w) losers.push(c);
-    }
-    const remaining = R.ALL_SKILLS.filter(s => !taken.has(s));
-    losers.sort((a, b) => a - b);
-    this._shuffle(losers);
-    const randomized = [];
-    for (const pid of losers) {
-      const idx = this.rng.randiRange(0, remaining.length - 1);
-      const s = remaining.splice(idx, 1)[0];
-      taken.set(s, pid);
-      randomized.push(pid);
-    }
+    // v0.9：技能自由选、可重复。选了什么就是什么；超时未选者随机分配。
     const assignments = {};
-    for (const [s, pid] of taken) {
-      const p = this.players[pid];
+    const randomized = [];
+    for (const p of this.players) {
+      let s = p.pendingSkillPick;
+      if (s === R.Skill.NONE) {
+        s = R.ALL_SKILLS[this.rng.randiRange(0, R.ALL_SKILLS.length - 1)];
+        randomized.push(p.id);
+      }
       p.skill = s;
       p.skillUsesLeft = R.SKILL_USES[s];
       p.houfaReadyRound = 0;
@@ -408,6 +396,7 @@ export class Game {
         hand_count: p.hand.length, skill: p.skill, skill_uses_left: p.skillUsesLeft,
         houfa_ready_round: p.houfaReadyRound, steps_taken: p.stepsTaken,
         has_gap: p.hasGap, golden_bell_used: p.goldenBellUsed,
+        char_id: p.charId,
       })),
       phase: this.phase, round_number: this.roundNumber, current_suit: this.currentSuit,
       suit_changed_by: this.suitChangedBy, current_player: this.currentPlayer,

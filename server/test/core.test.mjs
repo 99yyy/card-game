@@ -48,14 +48,28 @@ test("边界21: 上家=最近真正出过招的人", () => {
   assert.equal(g.lastPlayerWhoPlayed, 0);
 });
 
-test("边界26: 全员抢同一技能 → 各得不同", () => {
+test("边界26(v0.9): 技能可重复，全员各取所愿", () => {
   const g = new Game(26, true);
   g.newGame(["a","b","c","d"], [true,true,true,true]);
   let evs = [];
   for (let i = 0; i < 4; i++) evs = evs.concat(g.apply({ type: "PICK_SKILL", pid: i, skill: R.Skill.JINZHONGZHAO }));
-  const skills = new Set(g.players.map(p => p.skill));
-  assert.equal(skills.size, 4);
-  assert.equal(find(evs, "SKILLS_ASSIGNED").randomized.length, 3);
+  for (const p of g.players) assert.equal(p.skill, R.Skill.JINZHONGZHAO);
+  assert.equal(find(evs, "SKILLS_ASSIGNED").randomized.length, 0);
+});
+
+test("边界34(v0.9): 自由选皮囊可重复、全场可见、开局后锁定", () => {
+  const g = new Game(340, true);
+  g.newGame(["a","b","c"], [true,true,true]);
+  g.apply({ type: "PICK_CHAR", pid: 0, char_id: 5 });
+  g.apply({ type: "PICK_CHAR", pid: 1, char_id: 5 });
+  assert.equal(g.players[0].charId, 5);
+  assert.equal(g.players[1].charId, 5);
+  assert.equal(g.viewFor(2).players[0].char_id, 5);
+  const bad = g.apply({ type: "PICK_CHAR", pid: 0, char_id: 9 });
+  assert.equal(bad[0].type, "REJECTED");
+  for (let i = 0; i < 3; i++) g.apply({ type: "PICK_SKILL", pid: i, skill: i });
+  const late = g.apply({ type: "PICK_CHAR", pid: 0, char_id: 1 });
+  assert.equal(late[0].type, "REJECTED");
 });
 
 test("边界27: 冤枉人后由拆招者(退步者)开始下一轮", () => {

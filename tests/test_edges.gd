@@ -94,6 +94,7 @@ static func run_all() -> void:
 	_run("边界 32", _edge32)
 	_run("边界 33", _edge33)
 	_run("边界 27r", _edge27_reveal_path)
+	_run("边界 34(选角)", _edge34_char_pick)
 
 # 边界 1：本轮首位出招者能否拆招 → 不能
 static func _edge01() -> void:
@@ -237,17 +238,16 @@ static func _edge13() -> void:
 	var events := gs.apply(Action.use_gaixian(0, DAO))
 	Helpers.assert_true(_has(events, "REJECTED"), "边界13: 应 REJECTED")
 
-# 边界 14：两人都持改弦不会发生（技能不可重复）
+# 边界 14（v0.9 反转）：技能可重复——全员都可持改弦
 static func _edge14() -> void:
 	var gs := Helpers.make(4, 14, true)
 	for i in 4:
 		gs.apply(Action.pick_skill(i, Rules.Skill.GAIXIAN))
-	# 全员抢改弦 → 只有 1 人得到改弦
 	var holders := 0
 	for i in 4:
 		if gs.player(i).skill == Rules.Skill.GAIXIAN:
 			holders += 1
-	Helpers.assert_eq(holders, 1, "边界14: 改弦持有者应恰有 1 人")
+	Helpers.assert_eq(holders, 4, "边界14(v0.9): 技能可重复，4 人都应持改弦")
 
 # 边界 15：辨虚实指定已踏过的石板 → REJECTED
 static func _edge15() -> void:
@@ -338,12 +338,11 @@ static func _edge26() -> void:
 	var events := []
 	for i in 4:
 		events.append_array(gs.apply(Action.pick_skill(i, Rules.Skill.JINZHONGZHAO)))
-	var assigned := {}
+	# v0.9：可重复——全员如愿拿到金钟罩，无人被随机分配
 	for i in 4:
-		assigned[gs.player(i).skill] = true
-	Helpers.assert_eq(assigned.size(), 4, "边界26: 4 人应各得不同技能")
+		Helpers.assert_eq(gs.player(i).skill, Rules.Skill.JINZHONGZHAO, "边界26(v0.9): 各取所愿")
 	var sa := _find(events, "SKILLS_ASSIGNED")
-	Helpers.assert_eq(sa.randomized.size(), 3, "边界26: randomized 应为 3 人")
+	Helpers.assert_eq(sa.randomized.size(), 0, "边界26(v0.9): 无人被随机分配")
 
 # 边界 27：下一轮由谁先出招
 static func _edge27() -> void:
@@ -473,3 +472,19 @@ static func _edge27_reveal_path() -> void:
 	gs.apply(Action.play(0, [0]))
 	gs.apply(Action.challenge(1))               # P1 拆真招，被冤枉，P1 退步
 	Helpers.assert_eq(gs.round_starter, 1, "边界27r: 冤枉人后应由拆招者(退步者)开始下一轮")
+
+
+# 边界 34（v0.9）：报门户阶段自由选皮囊，可重复，全场视图可见；PLAY 阶段不可改
+static func _edge34_char_pick() -> void:
+	var gs := Helpers.make(3, 340, true)
+	gs.apply(Action.pick_char(0, 5))
+	gs.apply(Action.pick_char(1, 5))         # 允许重复
+	Helpers.assert_eq(gs.player(0).char_id, 5, "边界34: P0 选中 5 号")
+	Helpers.assert_eq(gs.player(1).char_id, 5, "边界34: 重复皮囊允许")
+	Helpers.assert_eq(int(gs.view_for(2).players[0].char_id), 5, "边界34: 皮囊全场可见")
+	var ev := gs.apply(Action.pick_char(0, 9))
+	Helpers.assert_true(ev.size() == 1 and ev[0].type == "REJECTED", "边界34: 非法皮囊号拒绝")
+	for i in 3:
+		gs.apply(Action.pick_skill(i, i))    # 结束报门户
+	var ev2 := gs.apply(Action.pick_char(0, 1))
+	Helpers.assert_true(ev2.size() == 1 and ev2[0].type == "REJECTED", "边界34: 开局后不可改皮囊")

@@ -226,8 +226,8 @@ func _tick_fx(delta: float) -> void:
 
 
 # 播放一次性帧动画：表情（播完回待机）
-func play_emote_anim(pid: int, emote: int) -> void:
-	var f: Array = Art.emote_frames(pid, emote)
+func play_emote_anim(emote: int) -> void:
+	var f: Array = Art.emote_frames(_frames_pid, emote)
 	if f.size() > 1:
 		_once_frames = f
 		_once_i = 0
@@ -237,8 +237,8 @@ func play_emote_anim(pid: int, emote: int) -> void:
 
 
 # 坠崖帧动画：播完停在最后一帧（配合旋转跌落）
-func play_fall_anim(pid: int) -> void:
-	var f: Array = Art.fall_frames(pid)
+func play_fall_anim() -> void:
+	var f: Array = Art.fall_frames(_frames_pid)
 	if f.size() > 1:
 		_once_frames = f
 		_once_i = 0
@@ -278,9 +278,10 @@ func shake() -> void:
 	tw.tween_property(self, "rotation", 0.0, 0.10)
 
 func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
-	if _frames_pid != int(d.id):
-		_frames_pid = int(d.id)
-		_frames = Art.char_frames(_frames_pid)
+	var cid: int = int(d.get("char_id", d.id))
+	if _frames_pid != cid:
+		_frames_pid = cid
+		_frames = Art.char_frames(cid)
 		_frame_i = 0
 		_frame_dir = 1
 		if not _frames.is_empty():
