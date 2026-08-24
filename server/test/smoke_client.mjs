@@ -47,12 +47,14 @@ await new Promise(r => setTimeout(r, 400));
 const b = client("乙");
 await new Promise(r => setTimeout(r, 600));
 
-// 房主补两个机器人并开局
-a.ws.send(JSON.stringify({ t: "add_bot" }));
-a.ws.send(JSON.stringify({ t: "add_bot" }));
-await new Promise(r => setTimeout(r, 300));
-console.log("lobby:", JSON.stringify(a.lobby?.seats), "can_start:", a.lobby?.can_start, "host:", a.lobby?.host);
-a.ws.send(JSON.stringify({ t: "start" }));
+// 由真正的房主（lobby.host）补机器人并开局 —— 并发加入时座位顺序不保证
+while (!a.lobby) await new Promise(r => setTimeout(r, 100));
+const host = a.lobby.host === a.seat ? a : b;
+host.ws.send(JSON.stringify({ t: "add_bot" }));
+host.ws.send(JSON.stringify({ t: "add_bot" }));
+await new Promise(r => setTimeout(r, 800));
+console.log("lobby:", JSON.stringify(host.lobby?.seats), "can_start:", host.lobby?.can_start, "host:", host.lobby?.host);
+host.ws.send(JSON.stringify({ t: "start" }));
 
 // 最多等 150 秒打完
 const t0 = Date.now();

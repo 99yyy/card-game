@@ -16,7 +16,14 @@ extends Control
 #   底部：我的区域——大立绘 | 大手牌（128x192） | 操作按钮
 #   右上：事件流；右下：表情；居中弹层：报门户 / 改弦 / 结算
 
-const HUMAN_ID := 0
+const NC := preload("res://ui/net_client.gd")
+
+# 本座位号：单机恒 0；联机 = 服务端分配的 seat
+var my_id := 0
+var online := false
+var net = null                        # NetClient（preload 见 NC）
+var _rgame = null                     # NetClient.RemoteGame
+var _game_started_online := false
 
 # 机器人思考时长（表现层参数，放在 UI 不动内核 rules.gd）
 # 用户反馈"节奏快了"：下限 1.5 → 2.5，上限 8 → 9
@@ -32,7 +39,7 @@ const SKILL_DESCS := [
 	"探查自己一块未踏过的石板是实是虚，结果只有你知道（×1）",
 ]
 
-var gs: GameState
+var gs  # GameState（单机）或 NetClient.RemoteGame（联机影子，见 net_client.gd）
 var _event_queue: Array = []
 var _event_elapsed := 0.0
 
@@ -96,6 +103,17 @@ var _game_over_label: Label
 var _restart_button: Button
 var _intro_modal: CenterContainer
 var _intro_start_btn: Button
+var _name_edit: LineEdit
+var _room_edit: LineEdit
+var _menu_err: Label
+var _http: HTTPRequest
+var _lobby_modal: CenterContainer
+var _lobby_code_label: Label
+var _lobby_seats_row: HBoxContainer
+var _lobby_status: Label
+var _btn_addbot: Button
+var _btn_rmbot: Button
+var _btn_start_online: Button
 var _hud_nodes: Array = []      # 开局前隐藏的 HUD（顶栏/日志/表情/底区）
 
 var _opp_panels: Dictionary = {}   # pid -> panel（不含自己）
@@ -105,6 +123,7 @@ func _ready() -> void:
 	_ui_rng.randomize()
 	_build_ui()
 	_build_intro()
+	_build_lobby()
 	# 先看玩法介绍，点「开始对局」才发牌（用户反馈：需要开场白）
 	for n in _hud_nodes:
 		n.visible = false
@@ -374,7 +393,7 @@ func _build_ui() -> void:
 	_restart_button.text = "再来一局"
 	_restart_button.custom_minimum_size = Vector2(160, 48)
 	_restart_button.add_theme_font_size_override("font_size", 20)
-	_restart_button.pressed.connect(_new_game)
+	_restart_button.pressed.connect(_on_restart)
 	ov.add_child(_restart_button)
 
 
@@ -432,13 +451,46 @@ func _build_intro() -> void:
 	v.add_child(rt)
 
 	_intro_start_btn = Button.new()
-	_intro_start_btn.text = "开始对局"
-	_intro_start_btn.custom_minimum_size = Vector2(200, 52)
-	_intro_start_btn.add_theme_font_size_override("font_size", 22)
+	_intro_start_btn.text = "单机练习"
+	_intro_start_btn.custom_minimum_size = Vector2(170, 50)
+	_intro_start_btn.add_theme_font_size_override("font_size", 20)
 	_intro_start_btn.pressed.connect(_on_intro_start)
-	var bc := CenterContainer.new()
-	bc.add_child(_intro_start_btn)
-	v.add_child(bc)
+
+	# 联机区：昵称 + 建房 / 房号加入
+	var net_row := HBoxContainer.new()
+	net_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	net_row.add_theme_constant_override("separation", 10)
+	_name_edit = LineEdit.new()
+	_name_edit.placeholder_text = "你的名号"
+	_name_edit.max_length = 8
+	_name_edit.custom_minimum_size = Vector2(140, 44)
+	net_row.add_child(_name_edit)
+	net_row.add_child(_intro_start_btn)
+	var create_btn := Button.new()
+	create_btn.text = "创建联机房"
+	create_btn.custom_minimum_size = Vector2(150, 50)
+	create_btn.add_theme_font_size_override("font_size", 20)
+	create_btn.pressed.connect(_on_create_room)
+	net_row.add_child(create_btn)
+	_room_edit = LineEdit.new()
+	_room_edit.placeholder_text = "六位房号"
+	_room_edit.max_length = 6
+	_room_edit.custom_minimum_size = Vector2(110, 44)
+	net_row.add_child(_room_edit)
+	var join_btn := Button.new()
+	join_btn.text = "加入"
+	join_btn.custom_minimum_size = Vector2(90, 50)
+	join_btn.add_theme_font_size_override("font_size", 20)
+	join_btn.pressed.connect(_on_join_room)
+	net_row.add_child(join_btn)
+	v.add_child(net_row)
+	_menu_err = _mk_label(v, 14)
+	_menu_err.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_menu_err.modulate = Color(1, 0.5, 0.4)
+
+	_http = HTTPRequest.new()
+	add_child(_http)
+	_http.request_completed.connect(_on_create_done)
 
 
 func _on_intro_start() -> void:
@@ -540,14 +592,7 @@ func _new_game() -> void:
 	_narration.text = "群雄齐聚绝顶，各报门户——"
 	_claim_label.text = ""
 
-	# 对手面板（自己不在上排）
-	for pid in _opp_panels:
-		_opp_panels[pid].queue_free()
-	_opp_panels = {}
-	for i in range(1, names.size()):
-		var panel = preload("res://ui/player_panel.gd").new()
-		_opp_row.add_child(panel)
-		_opp_panels[i] = panel
+	_build_panels(names.size(), 0)
 
 	_log_event_text("开局：%d 人局，报门户选技能（15 秒）" % names.size())
 	_refresh()
@@ -558,10 +603,13 @@ func _new_game() -> void:
 # ============================================================
 
 func _process(delta: float) -> void:
+	if online and net != null:
+		net.poll()
+		_drain_net()
 	if gs == null:
 		return
-	if _intro_modal.visible:
-		return          # 看玩法时整局暂停（倒计时、机器人、事件队列全部冻结）
+	if _intro_modal.visible and not online:
+		return          # 单机看玩法可暂停；联机服务端不等人
 	if not _event_queue.is_empty():
 		_event_elapsed += delta
 		if _event_elapsed >= _delay_for(_event_queue[0]):
@@ -571,18 +619,25 @@ func _process(delta: float) -> void:
 			_refresh()
 		return
 
-	_view = gs.view_for(HUMAN_ID)
+	_view = gs.view_for(my_id)
 	_update_fake_timer(delta)
 
-	match gs.phase:
-		Rules.Phase.GAME_OVER:
+	if online:
+		# 服务端驱动：本地只递减展示用倒计时
+		_turn_time_left = maxf(_turn_time_left - delta, 0.0)
+		_skill_pick_left = _turn_time_left
+		if gs.phase == Rules.Phase.GAME_OVER:
 			_show_game_over()
-		Rules.Phase.SKILL_PICK:
-			_tick_skill_pick(delta)
-		Rules.Phase.SWAP_WINDOW:
-			_tick_swap(delta)
-		Rules.Phase.PLAY:
-			_tick_play(delta)
+	else:
+		match gs.phase:
+			Rules.Phase.GAME_OVER:
+				_show_game_over()
+			Rules.Phase.SKILL_PICK:
+				_tick_skill_pick(delta)
+			Rules.Phase.SWAP_WINDOW:
+				_tick_swap(delta)
+			Rules.Phase.PLAY:
+				_tick_play(delta)
 	_refresh()
 
 
@@ -643,17 +698,20 @@ func _tick_play(delta: float) -> void:
 			var hand: Array = _view.you.hand
 			if hand.size() > 0:
 				var idx: int = _driver_rng.randi_range(0, hand.size() - 1)
-				_apply(Action.play(HUMAN_ID, [idx]))
+				_apply(Action.play(my_id, [idx]))
 
 
 func _apply(a: Dictionary) -> void:
-	var events := gs.apply(a)
-	if a.get("type", "") == "PLAY" and a.get("pid", -1) == HUMAN_ID and not _has_type(events, "REJECTED"):
+	var events: Array = gs.apply(a)
+	if a.get("type", "") == "PLAY" and a.get("pid", -1) == my_id and not _has_type(events, "REJECTED"):
 		_stat_human_plays += 1
 	_apply_events(events)
 
 
 func _apply_events(events: Array) -> void:
+	if online:
+		_event_queue.append_array(events)
+		return
 	match gs.phase:
 		Rules.Phase.PLAY:
 			_turn_time_left = Rules.PLAY_TIMEOUT_SEC
@@ -673,7 +731,7 @@ func _flash(col: Color, a: float) -> void:
 	tw.tween_property(_flash_rect, "color:a", 0.0, 0.55)
 
 func _punch(pid: int) -> void:
-	var panel: Control = _my_panel if pid == HUMAN_ID else _opp_panels.get(pid)
+	var panel: Control = _my_panel if pid == my_id else _opp_panels.get(pid)
 	if panel == null:
 		return
 	panel.pivot_offset = panel.size / 2.0
@@ -755,8 +813,8 @@ func _on_event_popped(e: Dictionary) -> void:
 				_opp_panels[int(e.pid)].flash_emote(Rules.EMOTES[e.emote])
 		"SKILL_USED":
 			# 私有结果提示（只有自己的视图里才有）
-			if int(e.pid) == HUMAN_ID:
-				var v := gs.view_for(HUMAN_ID)
+			if int(e.pid) == my_id:
+				var v: Dictionary = gs.view_for(my_id)
 				if int(e.skill) == Rules.Skill.TINGJIN:
 					var key := str(v.round_number)
 					if v.you.listen_result.has(key):
@@ -778,11 +836,11 @@ func _on_event_popped(e: Dictionary) -> void:
 func _on_play() -> void:
 	var indices: Array = _hand_panel.selected_indices()
 	if indices.size() >= 1 and indices.size() <= Rules.MAX_PLAY_CARDS:
-		_apply(Action.play(HUMAN_ID, indices))
+		_apply(Action.play(my_id, indices))
 
 
 func _on_challenge() -> void:
-	_apply(Action.challenge(HUMAN_ID))
+	_apply(Action.challenge(my_id))
 
 
 func _on_skill() -> void:
@@ -790,10 +848,10 @@ func _on_skill() -> void:
 	match you.skill:
 		Rules.Skill.TINGJIN:
 			if _view.last_player_who_played != -1 and _view.last_played_count > 0:
-				_apply(Action.use_tingjin(HUMAN_ID, 0))
+				_apply(Action.use_tingjin(my_id, 0))
 		Rules.Skill.BIANXUSHI:
 			if you.steps_taken < Rules.STONES:
-				_apply(Action.use_bianxushi(HUMAN_ID, you.steps_taken + 1))
+				_apply(Action.use_bianxushi(my_id, you.steps_taken + 1))
 		_:
 			pass
 
@@ -803,12 +861,12 @@ func _on_pass_window() -> void:
 
 
 func _on_swap_suit(s: int) -> void:
-	_apply(Action.use_gaixian(HUMAN_ID, s))
+	_apply(Action.use_gaixian(my_id, s))
 
 
 func _on_pick_skill(s: int) -> void:
 	if gs.phase == Rules.Phase.SKILL_PICK and _view.you.pending_skill_pick == Rules.Skill.NONE:
-		_apply(Action.pick_skill(HUMAN_ID, s))
+		_apply(Action.pick_skill(my_id, s))
 
 
 func _on_skill_hover(s: int) -> void:
@@ -817,12 +875,12 @@ func _on_skill_hover(s: int) -> void:
 
 func _on_emote(i: int) -> void:
 	if _view.get("you", {}).get("alive", false):
-		_apply(Action.emote(HUMAN_ID, i))
+		_apply(Action.emote(my_id, i))
 
 
 func _on_selection_changed(indices: Array) -> void:
 	var is_human_turn: bool = gs != null and gs.phase == Rules.Phase.PLAY \
-		and int(_view.get("current_player", -1)) == HUMAN_ID
+		and int(_view.get("current_player", -1)) == my_id
 	_play_button.disabled = not is_human_turn or indices.size() < 1 or indices.size() > Rules.MAX_PLAY_CARDS
 
 
@@ -833,7 +891,7 @@ func _on_selection_changed(indices: Array) -> void:
 func _refresh() -> void:
 	if gs == null:
 		return
-	_view = gs.view_for(HUMAN_ID)
+	_view = gs.view_for(my_id)
 
 	# 顶栏
 	_round_label.text = "第 %d 轮" % _view.round_number
@@ -866,13 +924,15 @@ func _refresh() -> void:
 				d["timer_frac"] = _fake_timer_frac()
 				if _fake_timer_frac() >= 1.0:
 					d["thinking_text"] = "仍在沉吟"
+			elif online:
+				d["timer_frac"] = clampf(1.0 - _turn_time_left / _phase_limit(), 0.0, 1.0)
 			elif d.is_bot:
 				d["timer_frac"] = clampf(_bot_think_elapsed / maxf(_bot_think_time, 0.01), 0.0, 1.0)
 			else:
 				d["timer_frac"] = clampf(1.0 - _turn_time_left / Rules.PLAY_TIMEOUT_SEC, 0.0, 1.0)
-			if i == HUMAN_ID:
+			if i == my_id:
 				d["own_timer"] = int(ceil(_turn_time_left))
-		if i == HUMAN_ID:
+		if i == my_id:
 			_my_panel.set_data(d, true, is_current)
 		elif _opp_panels.has(i):
 			_opp_panels[i].set_data(d, false, is_current)
@@ -916,7 +976,7 @@ func _refresh() -> void:
 
 	# 按钮态
 	var is_human_turn: bool = gs.phase == Rules.Phase.PLAY \
-		and int(_view.current_player) == HUMAN_ID and _view.you.hand.size() > 0
+		and int(_view.current_player) == my_id and _view.you.hand.size() > 0
 	_play_button.disabled = not is_human_turn or _hand_panel.selected_indices().size() < 1
 	_challenge_button.disabled = not (is_human_turn and _has_type(_view.legal_actions, "CHALLENGE"))
 	var sk: int = _view.you.skill
@@ -941,7 +1001,15 @@ func _refresh() -> void:
 
 	if gs.phase == Rules.Phase.GAME_OVER:
 		_over_modal.visible = true
-		_game_over_label.text = "🏆 %s 独立绝顶！" % _names[gs.winner]
+		_game_over_label.text = "🏆 %s 独立绝顶！" % _names.get(int(gs.winner), "?")
+		if online:
+			var is_host: bool = net != null and not net.lobby.is_empty() \
+				and int(net.lobby.get("host", -1)) == my_id
+			_restart_button.text = "再来一局" if is_host else "等待房主再开"
+			_restart_button.disabled = not is_host
+		else:
+			_restart_button.text = "再来一局"
+			_restart_button.disabled = false
 
 
 func _mk_stage_card(tex: Texture2D, suit: int) -> Control:
@@ -1029,3 +1097,307 @@ func _cards_text(cards: Array) -> String:
 
 func _log_event_text(s: String) -> void:
 	_event_log.append_text(s + "\n")
+
+
+# ============================================================
+# 联机（等待厅 / 网络泵）—— 规则草案 §11.2 客户端侧
+# ============================================================
+
+func _build_panels(n: int, me: int) -> void:
+	for pid in _opp_panels:
+		_opp_panels[pid].queue_free()
+	_opp_panels = {}
+	for i in n:
+		if i == me:
+			continue
+		var panel = preload("res://ui/player_panel.gd").new()
+		_opp_row.add_child(panel)
+		_opp_panels[i] = panel
+
+
+func _phase_limit() -> float:
+	match int(gs.phase):
+		Rules.Phase.SKILL_PICK: return Rules.SKILL_PICK_SEC
+		Rules.Phase.SWAP_WINDOW: return Rules.SWAP_WINDOW_SEC
+	return Rules.PLAY_TIMEOUT_SEC
+
+
+func _player_name() -> String:
+	var n := _name_edit.text.strip_edges()
+	return n if n != "" else "侠客"
+
+
+func _build_lobby() -> void:
+	_lobby_modal = CenterContainer.new()
+	_lobby_modal.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_lobby_modal.visible = false
+	add_child(_lobby_modal)
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", _flat_style(Color(0.03, 0.04, 0.07, 0.95), 12, 30, 22))
+	_lobby_modal.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	p.add_child(v)
+
+	# 石匾 + 房号
+	var plaque_wrap := Control.new()
+	plaque_wrap.custom_minimum_size = Vector2(384, 144)
+	var plaque := TextureRect.new()
+	var ptex: Texture2D = Art.load_tex("res://assets/ui/plaque_room.png")
+	if ptex != null:
+		plaque.texture = ptex
+	plaque.set_anchors_preset(Control.PRESET_FULL_RECT)
+	plaque.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	plaque.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	plaque_wrap.add_child(plaque)
+	_lobby_code_label = Label.new()
+	_lobby_code_label.add_theme_font_size_override("font_size", 44)
+	_lobby_code_label.modulate = Color(1, 0.87, 0.55)
+	_lobby_code_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_lobby_code_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lobby_code_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	plaque_wrap.add_child(_lobby_code_label)
+	var pc := CenterContainer.new()
+	pc.add_child(plaque_wrap)
+	v.add_child(pc)
+	var copy_btn := Button.new()
+	copy_btn.text = "复制房号，发给朋友"
+	copy_btn.focus_mode = Control.FOCUS_NONE
+	copy_btn.pressed.connect(_copy_room_code)
+	var cbc := CenterContainer.new()
+	cbc.add_child(copy_btn)
+	v.add_child(cbc)
+
+	_lobby_seats_row = HBoxContainer.new()
+	_lobby_seats_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_lobby_seats_row.add_theme_constant_override("separation", 18)
+	v.add_child(_lobby_seats_row)
+
+	_lobby_status = _mk_label(v, 15)
+	_lobby_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lobby_status.modulate = Color(0.85, 0.82, 0.7)
+
+	var btns := HBoxContainer.new()
+	btns.alignment = BoxContainer.ALIGNMENT_CENTER
+	btns.add_theme_constant_override("separation", 10)
+	v.add_child(btns)
+	_btn_addbot = Button.new()
+	_btn_addbot.text = "＋机器人"
+	_btn_addbot.pressed.connect(_send_add_bot)
+	btns.add_child(_btn_addbot)
+	_btn_rmbot = Button.new()
+	_btn_rmbot.text = "－机器人"
+	_btn_rmbot.pressed.connect(_send_remove_bot)
+	btns.add_child(_btn_rmbot)
+	_btn_start_online = Button.new()
+	_btn_start_online.text = "开始对局"
+	_btn_start_online.custom_minimum_size = Vector2(150, 46)
+	_btn_start_online.add_theme_font_size_override("font_size", 20)
+	_btn_start_online.pressed.connect(_send_start)
+	btns.add_child(_btn_start_online)
+	var leave := Button.new()
+	leave.text = "离开"
+	leave.pressed.connect(_leave_room)
+	btns.add_child(leave)
+
+
+func _on_create_room() -> void:
+	_menu_err.text = ""
+	var err := _http.request(NC.SERVER_HTTP + "/create", [], HTTPClient.METHOD_POST, "")
+	if err != OK:
+		_menu_err.text = "网络请求失败，请重试"
+
+
+func _on_create_done(_r: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
+	if code != 200:
+		_menu_err.text = "建房失败（%d），请重试" % code
+		return
+	var m = JSON.parse_string(body.get_string_from_utf8())
+	if m == null or not m.has("room"):
+		_menu_err.text = "建房失败，请重试"
+		return
+	_connect_room(str(m.room))
+
+
+func _on_join_room() -> void:
+	var code := _room_edit.text.strip_edges()
+	if not code.is_valid_int() or code.length() != 6:
+		_menu_err.text = "房号是 6 位数字"
+		return
+	_connect_room(code)
+
+
+func _connect_room(code: String) -> void:
+	online = true
+	_game_started_online = false
+	_rgame = null
+	net = NC.new()
+	net.connect_room(code, _player_name())
+	_menu_err.text = ""
+	_intro_modal.visible = false
+	_lobby_modal.visible = true
+	_lobby_code_label.text = code
+	_lobby_status.text = "连接中…"
+
+
+func _leave_room() -> void:
+	if net != null:
+		net.close()
+	net = null
+	online = false
+	gs = null
+	_game_started_online = false
+	_lobby_modal.visible = false
+	_over_modal.visible = false
+	for n2 in _hud_nodes:
+		n2.visible = false
+	_intro_modal.visible = true
+	_refresh_intro_button()
+
+
+func _on_restart() -> void:
+	if online:
+		if net != null:
+			net.send({"t": "rematch"})
+	else:
+		_new_game()
+
+
+func _show_menu_error(reason: String) -> void:
+	match reason:
+		"room_full": _menu_err.text = "房间已满（4 人）"
+		"in_progress": _menu_err.text = "该房间对局已开始"
+		"no_such_room": _menu_err.text = "房号不存在"
+		_: _menu_err.text = "连接断开：" + reason
+
+
+func _drain_net() -> void:
+	if net == null:
+		return
+	if not net.connected and net.close_reason != "" and not _game_started_online:
+		var reason: String = net.close_reason
+		net = null
+		online = false
+		_lobby_modal.visible = false
+		_intro_modal.visible = true
+		_show_menu_error(reason)
+		return
+	while not net.inbox.is_empty():
+		var m: Dictionary = net.inbox.pop_front()
+		match str(m.get("t", "")):
+			"lobby":
+				if str(m.get("mode", "")) == "lobby" and _game_started_online:
+					# 房主点了再来一局 → 全员回等待厅
+					_game_started_online = false
+					gs = null
+					_over_modal.visible = false
+					for n2 in _hud_nodes:
+						n2.visible = false
+					_lobby_modal.visible = true
+				_refresh_lobby()
+			"game":
+				_on_net_game(m)
+			"rejected":
+				_narration.text = "⚠ 动作被拒绝：" + str(m.get("reason", ""))
+
+
+func _on_net_game(m: Dictionary) -> void:
+	if _rgame == null:
+		_rgame = NC.RemoteGame.new(net)
+	_rgame.update(m.view)
+	if not _game_started_online:
+		_game_started_online = true
+		my_id = net.my_seat
+		gs = _rgame
+		_intro_modal.visible = false
+		_lobby_modal.visible = false
+		for n2 in _hud_nodes:
+			n2.visible = true
+		_event_log.clear()
+		_names = {}
+		for pl in m.view.players:
+			_names[int(pl.id)] = str(pl.name)
+		_build_panels(m.view.players.size(), my_id)
+		_hand_snapshot = []
+		_stage_sig = "!"
+		_reveal_cards = []
+		_narration.text = "群雄已至，对局开始——"
+		_stat_start_ms = Time.get_ticks_msec()
+	var dl := float(m.get("turn_deadline", 0))
+	var nowms := float(m.get("server_now", 0))
+	_turn_time_left = maxf((dl - nowms) / 1000.0, 0.0)
+	var evs: Array = m.get("events", [])
+	if not evs.is_empty():
+		_apply_events(evs)
+
+
+func _refresh_lobby() -> void:
+	if net == null or net.lobby.is_empty():
+		return
+	var L: Dictionary = net.lobby
+	_lobby_code_label.text = str(L.get("room", net.room))
+	var seats: Array = L.get("seats", [])
+	var is_host: bool = int(L.get("host", -1)) == net.my_seat
+	for c in _lobby_seats_row.get_children():
+		c.free()
+	var cushion: Texture2D = Art.load_tex("res://assets/ui/seat_empty.png")
+	for i in Rules.MAX_PLAYERS:
+		var box := VBoxContainer.new()
+		box.alignment = BoxContainer.ALIGNMENT_CENTER
+		box.add_theme_constant_override("separation", 4)
+		box.custom_minimum_size = Vector2(120, 0)
+		var slot := TextureRect.new()
+		slot.custom_minimum_size = Vector2(96, 128)
+		slot.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		slot.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var nm := Label.new()
+		nm.add_theme_font_size_override("font_size", 14)
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		if i < seats.size():
+			var st: Dictionary = seats[i]
+			slot.texture = Art.char_tex(i)
+			var tags := ""
+			if int(L.get("host", -1)) == i:
+				tags += "「房主」"
+			if bool(st.get("is_bot", false)):
+				tags += "〔机器人〕"
+			elif not bool(st.get("connected", true)):
+				tags += "〔离线〕"
+			nm.text = str(st.get("name", "?")) + tags
+			if int(st.get("seat", -1)) == net.my_seat:
+				nm.modulate = Color(1, 0.87, 0.5)
+		else:
+			slot.texture = cushion
+			slot.modulate = Color(0.75, 0.75, 0.8)
+			nm.text = "虚位以待"
+			nm.modulate = Color(0.6, 0.6, 0.6)
+		box.add_child(slot)
+		box.add_child(nm)
+		_lobby_seats_row.add_child(box)
+	_btn_addbot.visible = is_host and seats.size() < Rules.MAX_PLAYERS
+	_btn_rmbot.visible = is_host and seats.any(func(x): return bool(x.get("is_bot", false)))
+	_btn_start_online.visible = is_host
+	_btn_start_online.disabled = not bool(L.get("can_start", false))
+	if str(L.get("mode", "")) == "over":
+		_lobby_status.text = "对局已结束"
+	elif is_host:
+		_lobby_status.text = "把房号发给朋友；人不够可以补机器人（至少 %d 人）" % Rules.MIN_PLAYERS if not bool(L.get("can_start", false)) else "人齐了，随时可以开始"
+	else:
+		_lobby_status.text = "等待房主开局…"
+
+
+func _send_add_bot() -> void:
+	if net != null:
+		net.send({"t": "add_bot"})
+
+func _send_remove_bot() -> void:
+	if net != null:
+		net.send({"t": "remove_bot"})
+
+func _send_start() -> void:
+	if net != null:
+		net.send({"t": "start"})
+
+func _copy_room_code() -> void:
+	DisplayServer.clipboard_set(_lobby_code_label.text)
