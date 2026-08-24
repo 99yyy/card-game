@@ -16,17 +16,25 @@ var _timer_bar: ProgressBar
 var _own_timer_label: Label
 var _emote_label: Label
 var _emote_left := 0.0
+var _was_current := false
+var _sb_normal: StyleBoxFlat
+var _sb_current: StyleBoxFlat
 
 func _ready() -> void:
 	custom_minimum_size = Vector2(236, 0)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.05, 0.06, 0.09, 0.72)
-	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 10
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	add_theme_stylebox_override("panel", sb)
+	_sb_normal = StyleBoxFlat.new()
+	_sb_normal.bg_color = Color(0.05, 0.06, 0.09, 0.72)
+	_sb_normal.set_corner_radius_all(8)
+	_sb_normal.content_margin_left = 10
+	_sb_normal.content_margin_right = 10
+	_sb_normal.content_margin_top = 8
+	_sb_normal.content_margin_bottom = 8
+	# 当前行动者：金边 + 底色微亮（切换时带缩放呼吸）
+	_sb_current = _sb_normal.duplicate()
+	_sb_current.bg_color = Color(0.09, 0.09, 0.11, 0.85)
+	_sb_current.border_color = Color(0.95, 0.78, 0.4, 0.9)
+	_sb_current.set_border_width_all(2)
+	add_theme_stylebox_override("panel", _sb_normal)
 
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 8)
@@ -99,6 +107,20 @@ func flash_emote(text: String) -> void:
 	_emote_label.text = "「" + text + "」"
 	_emote_label.visible = true
 	_emote_left = 2.0
+	_emote_label.scale = Vector2(0.4, 0.4)
+	var tw := _emote_label.create_tween()
+	tw.tween_property(_emote_label, "scale", Vector2.ONE, 0.22) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+
+
+# 坠崖时的摇晃演出（table 在 FALL 事件时调用）
+func shake() -> void:
+	pivot_offset = size / 2.0
+	var tw := create_tween()
+	tw.tween_property(self, "rotation", 0.05, 0.07)
+	tw.tween_property(self, "rotation", -0.04, 0.09)
+	tw.tween_property(self, "rotation", 0.02, 0.08)
+	tw.tween_property(self, "rotation", 0.0, 0.10)
 
 func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
 	var tex: Texture2D = Art.char_tex(d.id)
@@ -161,3 +183,13 @@ func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
 		_own_timer_label.text = "剩 %d 秒" % own
 
 	modulate = Color(0.4, 0.4, 0.4) if not d.alive else Color(1, 1, 1)
+
+	# 轮到谁：金边亮起 + 轻微放大呼吸（只在切换瞬间起 tween，set_data 每帧都会被调）
+	if is_current != _was_current:
+		_was_current = is_current
+		add_theme_stylebox_override("panel", _sb_current if is_current else _sb_normal)
+		pivot_offset = size / 2.0
+		var tw := create_tween()
+		tw.tween_property(self, "scale",
+			Vector2(1.045, 1.045) if is_current else Vector2.ONE, 0.16) \
+			.set_ease(Tween.EASE_OUT)

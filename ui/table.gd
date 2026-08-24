@@ -145,6 +145,13 @@ func _build_ui() -> void:
 		bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(bg)
+		# 云海慢漂移：极缓的缩放往复，让静态背景"活"起来
+		bg.resized.connect(func(): bg.pivot_offset = bg.size / 2.0)
+		var drift := bg.create_tween().set_loops()
+		drift.tween_property(bg, "scale", Vector2(1.05, 1.05), 16.0) \
+			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		drift.tween_property(bg, "scale", Vector2.ONE, 16.0) \
+			.set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 	# ---- 顶栏（居中悬浮小条）----
 	var top_center := CenterContainer.new()
@@ -538,6 +545,25 @@ func _mk_action_button(parent: Node, text: String) -> Button:
 	return b
 
 
+# 弹层弹出动画：只在 false→true 的上升沿播放（visible 由 _refresh 每帧写）
+func _set_modal(n: Control, want: bool) -> void:
+	if n.visible == want:
+		return
+	if want:
+		n.visible = true
+		n.pivot_offset = n.size / 2.0
+		n.scale = Vector2(0.94, 0.94)
+		n.modulate.a = 0.0
+		var tw := n.create_tween().set_parallel(true)
+		tw.tween_property(n, "scale", Vector2.ONE, 0.18) \
+			.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+		tw.tween_property(n, "modulate:a", 1.0, 0.14)
+	else:
+		n.visible = false
+		n.scale = Vector2.ONE
+		n.modulate.a = 1.0
+
+
 func _flat_style(col: Color, radius: int, margin_h: int, margin_v: int) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = col
@@ -789,6 +815,9 @@ func _on_event_popped(e: Dictionary) -> void:
 	var txt := _event_text(e)
 	_log_event_text(txt)
 	_narration.text = txt
+	_narration.modulate.a = 0.25
+	var twn := _narration.create_tween()
+	twn.tween_property(_narration, "modulate:a", 1.0, 0.22)
 
 	match e.type:
 		"ROUND_START":
@@ -804,6 +833,9 @@ func _on_event_popped(e: Dictionary) -> void:
 		"FALL":
 			_flash(Color(0.75, 0.0, 0.0), 0.45)
 			_punch(int(e.pid))
+			var fp: Control = _my_panel if int(e.pid) == my_id else _opp_panels.get(int(e.pid))
+			if fp != null and fp.has_method("shake"):
+				fp.shake()
 		"GOLDEN_BELL":
 			_flash(Color(1.0, 0.82, 0.3), 0.35)
 			_punch(int(e.pid))
@@ -954,17 +986,28 @@ func _refresh() -> void:
 		for c in _stage_cards.get_children():
 			c.free()
 		if not _reveal_cards.is_empty():
-			# 逐张翻出：错峰淡入，学原版亮牌瞬间的节奏
+			# 逐张"翻牌"：横向 0→1 展开，错峰
 			for i in _reveal_cards.size():
 				var card := _mk_stage_card(Art.card_tex(_reveal_cards[i]), _reveal_cards[i])
-				card.modulate.a = 0.0
+				card.pivot_offset = Vector2(48, 72)
+				card.scale = Vector2(0.0, 1.0)
 				_stage_cards.add_child(card)
-				var tw := create_tween()
-				tw.tween_interval(0.15 * i)
-				tw.tween_property(card, "modulate:a", 1.0, 0.18)
+				var tw := card.create_tween()
+				tw.tween_interval(0.13 * i)
+				tw.tween_property(card, "scale", Vector2.ONE, 0.16) \
+					.set_ease(Tween.EASE_OUT)
 		elif _view.last_played_count > 0 and _view.last_player_who_played >= 0:
+			# 牌背弹入：缩放 + 淡入错峰
 			for i in _view.last_played_count:
-				_stage_cards.add_child(_mk_stage_card(Art.card_back_tex(), -1))
+				var back := _mk_stage_card(Art.card_back_tex(), -1)
+				back.pivot_offset = Vector2(48, 72)
+				back.scale = Vector2(0.55, 0.55)
+				back.modulate.a = 0.0
+				_stage_cards.add_child(back)
+				var tw := back.create_tween().set_parallel(true)
+				tw.tween_property(back, "scale", Vector2.ONE, 0.2) \
+					.set_delay(0.06 * i).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+				tw.tween_property(back, "modulate:a", 1.0, 0.15).set_delay(0.06 * i)
 
 	# 手牌（仅内容变化时重建，保留选中态）
 	var hand: Array = _view.you.hand
@@ -994,14 +1037,14 @@ func _refresh() -> void:
 	# 弹层
 	var picking: bool = gs.phase == Rules.Phase.SKILL_PICK \
 		and _view.you.pending_skill_pick == Rules.Skill.NONE and _view.you.alive
-	_skill_modal.visible = picking
+	_set_modal(_skill_modal, picking)
 	if picking:
 		_skill_pick_label.text = "报门户 —— 选一门技能（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
-	_swap_modal.visible = gs.phase == Rules.Phase.SWAP_WINDOW \
-		and _view.you.alive and _view.you.skill == Rules.Skill.GAIXIAN and _view.you.skill_uses_left > 0
+	_set_modal(_swap_modal, gs.phase == Rules.Phase.SWAP_WINDOW \
+		and _view.you.alive and _view.you.skill == Rules.Skill.GAIXIAN and _view.you.skill_uses_left > 0)
 
 	if gs.phase == Rules.Phase.GAME_OVER:
-		_over_modal.visible = true
+		_set_modal(_over_modal, true)
 		_game_over_label.text = "🏆 %s 独立绝顶！" % _names.get(int(gs.winner), "?")
 		if online:
 			var is_host: bool = net != null and not net.lobby.is_empty() \

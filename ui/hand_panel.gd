@@ -12,6 +12,8 @@ const CARD_SIZE := Vector2(128, 192)   # 64x96 素材 2x 整数放大，像素�
 var _hand: Array = []
 var _selected: Dictionary = {}
 var _boxes: Array = []
+var _hovered := -1
+var _prev_count := 0        # 只有牌变多（新发牌）才播飞入动画，出牌后不重播
 
 func _ready() -> void:
 	add_theme_constant_override("separation", 10)
@@ -19,12 +21,15 @@ func _ready() -> void:
 	custom_minimum_size = Vector2(0, CARD_SIZE.y + 20)
 
 func set_hand(cards: Array) -> void:
+	var deal_anim := cards.size() > _prev_count
+	_prev_count = cards.size()
 	_hand = cards.duplicate()
 	_selected = {}
-	_rebuild()
+	_hovered = -1
+	_rebuild(deal_anim)
 	selection_changed.emit([])
 
-func _rebuild() -> void:
+func _rebuild(deal_anim := false) -> void:
 	for c in get_children():
 		c.free()
 	_boxes = []
@@ -35,9 +40,39 @@ func _rebuild() -> void:
 		btn.flat = true
 		btn.focus_mode = Control.FOCUS_NONE
 		btn.pressed.connect(_on_toggle.bind(i))
-		btn.add_child(_card_visual(_hand[i]))
+		btn.mouse_entered.connect(_on_hover.bind(i, true))
+		btn.mouse_exited.connect(_on_hover.bind(i, false))
+		var face := _card_visual(_hand[i])
+		btn.add_child(face)
 		add_child(btn)
 		_boxes.append(btn)
+		if deal_anim:
+			# 发牌飞入：从下方错峰浮起
+			face.position.y = 52
+			face.modulate.a = 0.0
+			var tw := face.create_tween().set_parallel(true)
+			tw.tween_property(face, "position:y", 0.0, 0.26) \
+				.set_delay(0.05 * i).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+			tw.tween_property(face, "modulate:a", 1.0, 0.18).set_delay(0.05 * i)
+
+
+func _on_hover(idx: int, entered: bool) -> void:
+	_hovered = idx if entered else (-1 if _hovered == idx else _hovered)
+	_animate_card(idx)
+
+
+func _animate_card(idx: int) -> void:
+	if idx < 0 or idx >= _boxes.size():
+		return
+	var b: Button = _boxes[idx]
+	var face: Control = b.get_child(0)
+	var target := 0.0
+	if _selected.has(idx):
+		target = -18.0
+	elif _hovered == idx:
+		target = -10.0
+	var tw := face.create_tween()
+	tw.tween_property(face, "position:y", target, 0.12).set_ease(Tween.EASE_OUT)
 
 func _card_visual(suit: int) -> Control:
 	var tex: Texture2D = Art.card_tex(suit)
@@ -90,13 +125,8 @@ func _on_toggle(idx: int) -> void:
 func _update_selection_visual() -> void:
 	for i in _boxes.size():
 		var b: Button = _boxes[i]
-		var child: Control = b.get_child(0)
-		if _selected.has(i):
-			child.position.y = -18
-			b.modulate = Color(1.15, 1.12, 1.0)
-		else:
-			child.position.y = 0
-			b.modulate = Color(1, 1, 1)
+		b.modulate = Color(1.15, 1.12, 1.0) if _selected.has(i) else Color(1, 1, 1)
+		_animate_card(i)
 
 func selected_indices() -> Array:
 	var out: Array = _selected.keys()
