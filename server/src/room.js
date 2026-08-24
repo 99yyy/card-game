@@ -188,16 +188,23 @@ export class Room {
       return;
     }
     this._pushGameAll(evs);
-    // 机器人看戏：亮招后当事机器人有概率发表情（真招冷笑 / 虚招被拆摇头）
-    const rev = evs.find(e => e.type === "REVEALED");
-    if (rev != null && this.game.phase !== R.Phase.GAME_OVER) {
-      const s = this.seats[rev.pid];
-      if (s && s.isBot && this.driverRng.randf() < 0.4) {
-        const emote = rev.honest ? 0 : 3;
-        setTimeout(() => {
-          if (this.mode === "playing" && this.game)
-            this._pushGameAll(this.game.apply({ type: "EMOTE", pid: rev.pid, emote }));
-        }, 900);
+    // 机器人看戏：关键揭示后当事机器人有概率发表情（三类模式各自的"亮"时刻）
+    if (this.game.phase !== R.Phase.GAME_OVER) {
+      let epid = -1, emote = 0;
+      const rev = evs.find(e => e.type === "REVEALED");
+      const drev = evs.find(e => e.type === "DICE_REVEALED");
+      const orev = evs.find(e => e.type === "OFFER_REVEALED");
+      if (rev != null) { epid = rev.pid; emote = rev.honest ? 0 : 3; }
+      else if (drev != null) { epid = this.game.bidBy ?? -1; emote = drev.stands ? 0 : 3; }
+      else if (orev != null) { epid = orev.eater; emote = 3; }
+      if (epid >= 0) {
+        const s = this.seats[epid];
+        if (s && s.isBot && this.driverRng.randf() < 0.45) {
+          setTimeout(() => {
+            if (this.mode === "playing" && this.game)
+              this._pushGameAll(this.game.apply({ type: "EMOTE", pid: epid, emote }));
+          }, 900);
+        }
       }
     }
     if (this.game.phase === R.Phase.GAME_OVER) {
