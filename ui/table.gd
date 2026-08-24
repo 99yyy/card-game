@@ -489,6 +489,7 @@ func _build_intro() -> void:
 	_menu_err.modulate = Color(1, 0.5, 0.4)
 
 	_http = HTTPRequest.new()
+	_http.timeout = 10.0        # Web 端曾出现请求悬挂：超时后可重试，而不是永久卡死
 	add_child(_http)
 	_http.request_completed.connect(_on_create_done)
 
@@ -1203,7 +1204,7 @@ func _build_lobby() -> void:
 
 
 func _on_create_room() -> void:
-	_menu_err.text = ""
+	_menu_err.text = "建房中…"
 	var err := _http.request(NC.SERVER_HTTP + "/create", [], HTTPClient.METHOD_POST, "")
 	if err != OK:
 		_menu_err.text = "网络请求失败，请重试"
