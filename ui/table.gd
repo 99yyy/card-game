@@ -98,6 +98,7 @@ var _skill_modal: CenterContainer
 var _skill_pick_label: Label
 var _skill_desc_label: Label
 var _swap_modal: CenterContainer
+var _swap_suit_btns: Array = []        # 改弦的三张路数牌按钮（当前路数要禁用）
 var _probe_modal: CenterContainer      # 辨虚实：选石板
 var _probe_row: HBoxContainer
 var _listen_modal: CenterContainer     # 听劲：选看哪张
@@ -367,20 +368,31 @@ func _build_ui() -> void:
 	wv.add_child(wrow)
 	for s in Rules.PLAYABLE_SUITS:
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(80, 120)
+		b.custom_minimum_size = Vector2(80, 132)
 		b.flat = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.pressed.connect(_on_swap_suit.bind(s))
+		var bv := VBoxContainer.new()
+		bv.set_anchors_preset(Control.PRESET_FULL_RECT)
+		bv.alignment = BoxContainer.ALIGNMENT_CENTER
+		bv.add_theme_constant_override("separation", 2)
+		bv.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(bv)
 		var tr := TextureRect.new()
-		tr.set_anchors_preset(Control.PRESET_FULL_RECT)
+		tr.custom_minimum_size = Vector2(80, 120)
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var tex: Texture2D = Art.card_tex(s)
 		if tex != null:
 			tr.texture = tex
-		b.add_child(tr)
+		bv.add_child(tr)
+		var tag := Label.new()
+		tag.add_theme_font_size_override("font_size", 11)
+		tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bv.add_child(tag)
 		wrow.add_child(b)
+		_swap_suit_btns.append({"btn": b, "tex": tr, "tag": tag, "suit": s})
 	var skipb := Button.new()
 	skipb.text = "不改（跳过）"
 	skipb.focus_mode = Control.FOCUS_NONE
@@ -1050,8 +1062,15 @@ func _refresh() -> void:
 	_set_modal(_skill_modal, picking)
 	if picking:
 		_skill_pick_label.text = "报门户 —— 选一门技能（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
-	_set_modal(_swap_modal, gs.phase == Rules.Phase.SWAP_WINDOW \
-		and _view.you.alive and _view.you.skill == Rules.Skill.GAIXIAN and _view.you.skill_uses_left > 0)
+	var swap_open: bool = gs.phase == Rules.Phase.SWAP_WINDOW \
+		and _view.you.alive and _view.you.skill == Rules.Skill.GAIXIAN and _view.you.skill_uses_left > 0
+	_set_modal(_swap_modal, swap_open)
+	if swap_open:
+		for it in _swap_suit_btns:
+			var is_cur: bool = int(it.suit) == int(_view.current_suit)
+			it.btn.disabled = is_cur
+			it.tex.modulate = Color(0.4, 0.4, 0.4) if is_cur else Color(1, 1, 1)
+			it.tag.text = "（现路数）" if is_cur else ""
 
 	if gs.phase == Rules.Phase.GAME_OVER:
 		_set_modal(_over_modal, true)
