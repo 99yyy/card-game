@@ -99,6 +99,41 @@ static func card_tex(suit: int) -> Texture2D:
 static func card_back_tex() -> Texture2D:
 	return load_tex("res://assets/cards/card_back.png")
 
+# 花色角标颜色（与顶栏路数配色一致）
+static func suit_color(suit: int) -> Color:
+	match suit:
+		Rules.Suit.DAO: return Color(1.0, 0.62, 0.52)
+		Rules.Suit.JIAN: return Color(0.62, 0.8, 1.0)
+		Rules.Suit.ZHANG: return Color(0.6, 1.0, 0.72)
+		Rules.SUIT_XINMO: return Color(0.85, 0.6, 1.0)
+	return Color(1.0, 0.88, 0.55)   # 化劲
+
+# 卡面左上角的花色汉字角标。刀/剑卡面同为剑形兵器容易认错（用户实测反馈），
+# 文字通道做冗余辨识，色弱玩家也稳。suit 越界返回 null。
+static func suit_chip(suit: int) -> Control:
+	if suit < 0 or suit >= Rules.SUIT_NAMES.size():
+		return null
+	var col := suit_color(suit)
+	var chip := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.02, 0.03, 0.05, 0.78)
+	sb.border_color = Color(col.r, col.g, col.b, 0.9)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(6)
+	sb.content_margin_left = 4
+	sb.content_margin_right = 4
+	sb.content_margin_top = 1
+	sb.content_margin_bottom = 1
+	chip.add_theme_stylebox_override("panel", sb)
+	chip.position = Vector2(5, 5)
+	chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var l := Label.new()
+	l.text = Rules.SUIT_NAMES[suit].substr(0, 1)
+	l.add_theme_font_size_override("font_size", 13)
+	l.add_theme_color_override("font_color", col)
+	chip.add_child(l)
+	return chip
+
 static func stone_ok_tex() -> Texture2D:
 	return load_tex("res://assets/stones/stone_ok.png")
 
@@ -108,8 +143,17 @@ static func stone_current_tex() -> Texture2D:
 static func stone_gap_tex() -> Texture2D:
 	return load_tex("res://assets/stones/stone_gap.png")
 
-static func bg_tex() -> Texture2D:
-	return load_tex("res://assets/bg/bg_summit_a.png")
+# 背景按玩法切换：论招用华山余晖，心魔紫雾夜、暗器暮色、递毒绿瘴各一张
+static func bg_tex(mode: int = 0) -> Texture2D:
+	var path := "res://assets/bg/bg_summit_a.png"
+	match mode:
+		Rules.Mode.XINMO: path = "res://assets/bg/bg_xinmo.png"
+		Rules.Mode.ANQI: path = "res://assets/bg/bg_anqi.png"
+		Rules.Mode.DIDU: path = "res://assets/bg/bg_didu.png"
+	var t := load_tex(path)
+	if t == null:
+		t = load_tex("res://assets/bg/bg_summit_a.png")
+	return t
 
 static func skill_icon_tex(skill: int) -> Texture2D:
 	var name := ""
@@ -141,6 +185,21 @@ static func poison_box_tex() -> Texture2D:
 
 static func dice_tex(face: int) -> Texture2D:
 	return load_tex("res://assets/icons/dice_%d.png" % face)
+
+# 玩法模式图标（顺序对应 Rules.Mode：论招/心魔/暗器/递毒）
+const MODE_ICON_NAMES := ["lunzhao", "xinmo", "anqi", "didu"]
+static func mode_icon_tex(mode: int) -> Texture2D:
+	if mode < 0 or mode >= MODE_ICON_NAMES.size():
+		return null
+	return load_tex("res://assets/icons/mode_%s.png" % MODE_ICON_NAMES[mode])
+
+# 暗器模式：骰盅
+static func dice_cup_tex() -> Texture2D:
+	return load_tex("res://assets/icons/dice_cup.png")
+
+# 结算弹层的登顶画
+static func victory_tex() -> Texture2D:
+	return load_tex("res://assets/ui/victory_art.png")
 
 static func panel_tex() -> Texture2D:
 	return load_tex("res://assets/ui/panel_dark.png")

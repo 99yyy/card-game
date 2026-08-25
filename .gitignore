@@ -3,6 +3,10 @@
 *.tmp
 export_presets.cfg.bak
 
+# 本地开发工具（godot-ai MCP 编辑器插件与会话配置，不随游戏发布）
+addons/godot_ai/
+.claude/
+
 # 构建产物
 build/
 export/

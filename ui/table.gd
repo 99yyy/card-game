@@ -79,6 +79,11 @@ var _reveal_honest := false
 var _reveal_pid := -1
 var _stage_sig := ""            # 舞台内容签名：变了才重建（否则每帧重建会杀掉动画）
 var _flash_rect: ColorRect      # 全屏闪光（退步红 / 金钟罩金）
+var _modal_scrim: ColorRect     # 弹层遮罩：任一弹层打开时压暗牌桌，防止舞台文字透出弹窗
+var _seal: PanelContainer       # 亮招印章（真/虚/立/破）：盖在舞台牌面上的落印演出
+var _seal_label: Label
+var _skill_sel := -1            # 报门户两段式选技能：第一次点=看说明，第二次点=确认（触屏无 hover）
+var _skill_sent := false        # 预选兜底只发一次（联机下服务端超时会随机，须抢先提交）
 
 # ---- UI 节点 ----
 var _round_label: Label
@@ -133,6 +138,8 @@ var _lobby_mode_btns: Array = []   # 等待厅模式按钮（房主可点）
 var _lobby_mode_label: Label
 var _ready_btn: Button             # 暗器/递毒的报门户"准备"按钮
 var _skill_row_node: HBoxContainer # 技能行（新模式隐藏）
+var _skill_hint_label: Label       # "再选一门技能"提示（随技能行一起隐藏）
+var _bg_rect: TextureRect          # 背景（随玩法换图）
 var _dice_zone: HBoxContainer      # 暗器：我的骰盅+叫价控件
 var _dice_row: HBoxContainer
 var _dice_n := 1
@@ -186,6 +193,7 @@ func _build_ui() -> void:
 		bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(bg)
+		_bg_rect = bg
 		# 云海慢漂移：极缓的缩放往复，让静态背景"活"起来
 		bg.resized.connect(func(): bg.pivot_offset = bg.size / 2.0)
 		var drift := bg.create_tween().set_loops()
@@ -214,7 +222,7 @@ func _build_ui() -> void:
 	top.add_child(suit_box)
 	_suit_label = _mk_label(suit_box, 18)
 	_suit_card = TextureRect.new()
-	_suit_card.custom_minimum_size = Vector2(21, 32)
+	_suit_card.custom_minimum_size = Vector2(26, 39)
 	_suit_card.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_suit_card.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	suit_box.add_child(_suit_card)
@@ -256,6 +264,20 @@ func _build_ui() -> void:
 	_stage_cards = HBoxContainer.new()
 	_stage_cards.add_theme_constant_override("separation", 8)
 	stage_center.add_child(_stage_cards)
+	# 亮招印章：CenterContainer 会把它居中压在牌面之上（后加的绘制在上层）
+	_seal = PanelContainer.new()
+	_seal.custom_minimum_size = Vector2(96, 96)
+	_seal.pivot_offset = Vector2(48, 48)
+	_seal.visible = false
+	_seal.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_seal_label = Label.new()
+	_seal_label.add_theme_font_size_override("font_size", 54)
+	_seal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_seal_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_seal_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.55))
+	_seal_label.add_theme_constant_override("outline_size", 4)
+	_seal.add_child(_seal_label)
+	stage_center.add_child(_seal)
 
 	# ---- 底部：我的区域 ----
 	_bottom_zone = PanelContainer.new()
@@ -288,7 +310,7 @@ func _build_ui() -> void:
 	bottom.add_child(btn_col)
 	_play_button = _mk_action_button(btn_col, "出招")
 	_play_button.pressed.connect(_on_play)
-	_challenge_button = _mk_action_button(btn_col, "拆招！")
+	_challenge_button = _mk_action_button(btn_col, "拆招！", Color(0.85, 0.42, 0.32))
 	_challenge_button.pressed.connect(_on_challenge)
 	_skill_button = _mk_action_button(btn_col, "技能")
 	_skill_button.pressed.connect(_on_skill)
@@ -296,20 +318,29 @@ func _build_ui() -> void:
 	# ---- 表情（右下，悬于底区上缘）----
 	_emote_bar = HBoxContainer.new()
 	_emote_bar.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	_emote_bar.offset_left = -420
+	_emote_bar.offset_left = -560
 	_emote_bar.offset_right = -12
-	_emote_bar.offset_top = -282
-	_emote_bar.offset_bottom = -248
+	_emote_bar.offset_top = -288
+	_emote_bar.offset_bottom = -250
 	_emote_bar.alignment = BoxContainer.ALIGNMENT_END
-	_emote_bar.add_theme_constant_override("separation", 6)
+	_emote_bar.add_theme_constant_override("separation", 8)
 	add_child(_emote_bar)
 	for i in Rules.EMOTES.size():
 		var b := Button.new()
 		b.text = Rules.EMOTES[i]
 		b.focus_mode = Control.FOCUS_NONE
-		if _touch:
-			b.custom_minimum_size = Vector2(60, 44)
+		b.custom_minimum_size = Vector2(64, 44) if _touch else Vector2(56, 34)
 		b.add_theme_font_size_override("font_size", 17 if _touch else 14)
+		# 半透明小圆片样式：不与暗背景糊成一团
+		var esb := _flat_style(Color(0.08, 0.09, 0.13, 0.82), 15, 8, 4)
+		esb.border_color = Color(0.55, 0.48, 0.32, 0.9)
+		esb.set_border_width_all(1)
+		var esb_h: StyleBoxFlat = esb.duplicate()
+		esb_h.bg_color = Color(0.16, 0.14, 0.1, 0.92)
+		esb_h.border_color = Color(1.0, 0.85, 0.5)
+		b.add_theme_stylebox_override("normal", esb)
+		b.add_theme_stylebox_override("hover", esb_h)
+		b.add_theme_stylebox_override("pressed", esb_h)
 		b.pressed.connect(_on_emote.bind(i))
 		_emote_bar.add_child(b)
 	_hud_nodes.append(_emote_bar)
@@ -337,6 +368,14 @@ func _build_ui() -> void:
 	_flash_rect.color = Color(1, 0, 0, 0)
 	_flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_flash_rect)
+
+	# ---- 弹层遮罩（在闪光之上、所有弹层之下；挡住误触）----
+	_modal_scrim = ColorRect.new()
+	_modal_scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_modal_scrim.color = Color(0.01, 0.02, 0.04, 0.62)
+	_modal_scrim.visible = false
+	_modal_scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_modal_scrim)
 
 	# ---- 报门户弹层 ----
 	_skill_modal = CenterContainer.new()
@@ -381,6 +420,7 @@ func _build_ui() -> void:
 	shint.text = "再选一门技能 ——"
 	shint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shint.modulate = Color(0.8, 0.78, 0.68)
+	_skill_hint_label = shint
 	var srow := HBoxContainer.new()
 	srow.add_theme_constant_override("separation", 10)
 	sv.add_child(srow)
@@ -425,7 +465,7 @@ func _build_ui() -> void:
 	_skill_desc_label = _mk_label(sv, 15)
 	_skill_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_skill_desc_label.modulate = Color(0.85, 0.82, 0.7)
-	_skill_desc_label.text = "移到技能上查看说明；技能可与他人重复，各选各的"
+	_skill_desc_label.text = "点一门技能查看说明，再点一次确认；技能可与他人重复"
 
 	# ---- 改弦弹层 ----
 	_swap_modal = CenterContainer.new()
@@ -465,6 +505,9 @@ func _build_ui() -> void:
 		var tex: Texture2D = Art.card_tex(s)
 		if tex != null:
 			tr.texture = tex
+		var wchip := Art.suit_chip(s)
+		if wchip != null:
+			tr.add_child(wchip)
 		bv.add_child(tr)
 		var tag := Label.new()
 		tag.add_theme_font_size_override("font_size", 11)
@@ -490,6 +533,14 @@ func _build_ui() -> void:
 	ov.add_theme_constant_override("separation", 14)
 	ov.alignment = BoxContainer.ALIGNMENT_CENTER
 	op.add_child(ov)
+	var vt := Art.victory_tex()
+	if vt != null:
+		var vtr := TextureRect.new()
+		vtr.texture = vt
+		vtr.custom_minimum_size = Vector2(480, 270)
+		vtr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		vtr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		ov.add_child(vtr)
 	_game_over_label = _mk_label(ov, 30)
 	_game_over_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_restart_button = Button.new()
@@ -518,15 +569,15 @@ func _build_intro() -> void:
 	_intro_modal.visible = false
 	add_child(_intro_modal)
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", _flat_style(Color(0.03, 0.04, 0.07, 0.96), 12, 34, 26))
+	p.add_theme_stylebox_override("panel", _flat_style(Color(0.03, 0.04, 0.07, 0.96), 12, 30, 14))
 	_intro_modal.add_child(p)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
+	v.add_theme_constant_override("separation", 9)
 	v.custom_minimum_size = Vector2(760, 0)
 	p.add_child(v)
 
 	var banner_wrap := Control.new()
-	banner_wrap.custom_minimum_size = Vector2(480, 150)
+	banner_wrap.custom_minimum_size = Vector2(400, 118)
 	var banner := TextureRect.new()
 	var btex: Texture2D = Art.title_banner()
 	if btex != null:
@@ -536,7 +587,7 @@ func _build_intro() -> void:
 	banner.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	banner_wrap.add_child(banner)
 	var title := Label.new()
-	title.add_theme_font_size_override("font_size", 44)
+	title.add_theme_font_size_override("font_size", 38)
 	title.text = "绝　顶"
 	title.set_anchors_preset(Control.PRESET_FULL_RECT)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -594,6 +645,10 @@ func _build_intro() -> void:
 		mb.custom_minimum_size = Vector2(96, 44)
 		mb.focus_mode = Control.FOCUS_NONE
 		mb.add_theme_font_size_override("font_size", 18)
+		var mic := Art.mode_icon_tex(mi)
+		if mic != null:
+			mb.icon = mic
+			mb.add_theme_constant_override("icon_max_width", 26)
 		mb.pressed.connect(_on_mode_pick.bind(mi))
 		mode_row.add_child(mb)
 		_mode_btns.append(mb)
@@ -661,18 +716,18 @@ func _mk_label(parent: Node, size: int) -> Label:
 	return l
 
 
-func _mk_action_button(parent: Node, text: String) -> Button:
+func _mk_action_button(parent: Node, text: String, accent := Color(0.78, 0.64, 0.35)) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(200, 68) if _touch else Vector2(150, 48)
 	b.focus_mode = Control.FOCUS_NONE
 	b.add_theme_font_size_override("font_size", 24 if _touch else 20)
-	# 清晰的描边按钮（木纹贴图在暗底上几乎不可见，弃用）
+	# 清晰的描边按钮（木纹贴图在暗底上几乎不可见，弃用）；accent 区分动作性质（拆招=红）
 	var sb_n := _flat_style(Color(0.16, 0.13, 0.09, 0.95), 6, 10, 6)
-	sb_n.border_color = Color(0.78, 0.64, 0.35)
+	sb_n.border_color = accent
 	sb_n.set_border_width_all(2)
 	var sb_h := _flat_style(Color(0.24, 0.19, 0.12, 0.95), 6, 10, 6)
-	sb_h.border_color = Color(1.0, 0.85, 0.5)
+	sb_h.border_color = (accent * 1.3).clamp(Color.BLACK, Color.WHITE)
 	sb_h.set_border_width_all(2)
 	var sb_d := _flat_style(Color(0.10, 0.10, 0.12, 0.6), 6, 10, 6)
 	sb_d.border_color = Color(0.4, 0.4, 0.4, 0.5)
@@ -720,11 +775,13 @@ func _flat_style(col: Color, radius: int, margin_h: int, margin_v: int) -> Style
 # 开局
 # ============================================================
 
+const BOT_NAMES := ["无名客", "铁掌怪", "白衣秀士"]
+
 func _new_game() -> void:
-	var names := ["你"]
+	var names := [_player_name()]
 	var bots := [false]
 	for i in range(1, 4):          # 1 真人 + 3 机器人 = 4 人局
-		names.append("机器人%d" % i)
+		names.append(BOT_NAMES[i - 1])
 		bots.append(true)
 	var seed: int = int(Time.get_unix_time_from_system()) & 0x7fffffff
 	match game_mode:
@@ -749,6 +806,12 @@ func _new_game() -> void:
 	_swap_left = Rules.SWAP_WINDOW_SEC
 	_ready_btn.text = "准备"
 	_ready_btn.disabled = false
+	_skill_sel = -1
+	_skill_sent = false
+	for b in _skill_row_node.get_children():
+		b.modulate = Color(1, 1, 1)
+	_skill_desc_label.text = "点一门技能查看说明，再点一次确认；技能可与他人重复"
+	_skill_desc_label.modulate = Color(0.85, 0.82, 0.7)
 	_passon_mode = false
 	_poison_target = -1
 	_hand_panel.tex_override = Art.poison_texes() if game_mode == Rules.Mode.DIDU else []
@@ -771,6 +834,7 @@ func _new_game() -> void:
 	_event_log.clear()
 	_narration.text = "群雄齐聚绝顶，各报门户——"
 	_claim_label.text = ""
+	_seal.visible = false
 
 	_build_panels(names.size(), 0)
 
@@ -783,6 +847,7 @@ func _new_game() -> void:
 # ============================================================
 
 func _process(delta: float) -> void:
+	_update_scrim()
 	if online and net != null:
 		net.poll()
 		_drain_net()
@@ -827,6 +892,19 @@ func _process(delta: float) -> void:
 	_refresh()
 
 
+func _update_scrim() -> void:
+	if _modal_scrim == null:
+		return
+	var any: bool = (_intro_modal != null and _intro_modal.visible) \
+		or (_lobby_modal != null and _lobby_modal.visible) \
+		or (_skill_modal != null and _skill_modal.visible) \
+		or (_swap_modal != null and _swap_modal.visible) \
+		or (_over_modal != null and _over_modal.visible) \
+		or (_probe_modal != null and _probe_modal.visible) \
+		or (_listen_modal != null and _listen_modal.visible)
+	_modal_scrim.visible = any
+
+
 func _tick_skill_pick(delta: float) -> void:
 	_skill_pick_left -= delta
 	if not _skill_pick_bots.is_empty():
@@ -836,7 +914,12 @@ func _tick_skill_pick(delta: float) -> void:
 		return
 	if _view.you.alive and _view.you.pending_skill_pick == Rules.Skill.NONE:
 		if _skill_pick_left <= 0.0:
-			_apply_events(gs.force_resolve_skill_pick())
+			if _skill_sel >= 0 and not _skill_sent:
+				# 已点过一门但没来得及二次确认：按预选算，别随机
+				_skill_sent = true
+				_apply(Action.pick_skill(my_id, _skill_sel))
+			else:
+				_apply_events(gs.force_resolve_skill_pick())
 			return
 
 
@@ -929,6 +1012,27 @@ func _react(pid: int, kind: String) -> void:
 		panel.react(kind)
 
 
+# 落印：篆印从大到小砸在舞台牌面上（虚/破=朱红，真/立=鎏金）
+func _show_seal(txt: String, bad: bool, delay := 0.0) -> void:
+	var col := Color(0.9, 0.24, 0.18) if bad else Color(0.92, 0.76, 0.36)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(col.r, col.g, col.b, 0.14)
+	sb.border_color = col
+	sb.set_border_width_all(4)
+	sb.set_corner_radius_all(10)
+	_seal.add_theme_stylebox_override("panel", sb)
+	_seal_label.text = txt
+	_seal_label.add_theme_color_override("font_color", col)
+	_seal.visible = true
+	_seal.rotation = -0.14
+	_seal.scale = Vector2(2.6, 2.6)
+	_seal.modulate.a = 0.0
+	var tw := _seal.create_tween().set_parallel(true)
+	tw.tween_property(_seal, "scale", Vector2.ONE, 0.2) \
+		.set_delay(delay).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tw.tween_property(_seal, "modulate:a", 1.0, 0.14).set_delay(delay)
+
+
 func _flash(col: Color, a: float) -> void:
 	_flash_rect.color = Color(col.r, col.g, col.b, a)
 	var tw := create_tween()
@@ -952,6 +1056,8 @@ func _delay_for(e: Dictionary) -> float:
 			return 2.4
 		"CHALLENGED", "HEAVEN_CHECK":
 			return 1.8
+		"RETREAT":
+			return 1.8   # 退步紧跟亮招：稍放宽，让"亮出真章"那一拍喘口气
 		"ROUND_START", "ROUND_END", "SKILLS_ASSIGNED", "SUIT_CHANGED":
 			return 1.5
 		"DEALT", "SKIPPED", "EMOTE":
@@ -996,6 +1102,15 @@ func _on_event_popped(e: Dictionary) -> void:
 	_narration.modulate.a = 0.25
 	var twn := _narration.create_tween()
 	twn.tween_property(_narration, "modulate:a", 1.0, 0.22)
+	# 印章的生命周期：揭示后压在牌面上，陪完整段后果演出（退步/坠崖/金钟罩…），
+	# 直到新的行动开始才撤（_delay_for 的延时发生在事件弹出前，若"下一事件即撤"
+	# 印章只能活 1 秒出头）
+	match e.type:
+		"RETREAT", "FALL", "GOLDEN_BELL", "HOUFA_TRIGGERED", "ROUND_END", \
+		"GAME_OVER", "XINMO_TRIGGERED", "EMOTE", "POISON_EATEN", "POISONED_OUT":
+			pass
+		_:
+			_seal.visible = false
 
 	match e.type:
 		"ROUND_START":
@@ -1012,9 +1127,16 @@ func _on_event_popped(e: Dictionary) -> void:
 			_reveal_cards = e.cards.duplicate()
 			_reveal_honest = e.honest
 			_reveal_pid = e.pid
+			# 落印：等牌翻完再砸下来；虚招额外一记暗红闪 + 撒谎者面板弹跳
+			_show_seal("真" if bool(e.honest) else "虚", not bool(e.honest),
+				0.13 * _reveal_cards.size() + 0.18)
+			if not bool(e.honest):
+				_flash(Color(0.7, 0.06, 0.06), 0.18)
+				_punch(int(e.pid))
 			if not online:
 				_maybe_bot_emote(e)
 		"DICE_REVEALED":
+			_show_seal("立" if bool(e.stands) else "破", not bool(e.stands), 0.15)
 			if not online:
 				var bp := int(_view.get("bid_by", -1))
 				if bp >= 0 and bp < _view.players.size() and bool(_view.players[bp].is_bot) \
@@ -1126,16 +1248,30 @@ func _on_pick_char(ci: int) -> void:
 		_apply(Action.pick_char(my_id, ci))
 		for i in _char_btns.size():
 			_char_btns[i].modulate = Color(1, 0.85, 0.4) if i == ci else Color(1, 1, 1)
-			_char_btns[i].scale = Vector2(1.06, 1.06) if i == ci else Vector2.ONE
+			_char_btns[i].pivot_offset = _char_btns[i].size / 2.0
+			_char_btns[i].scale = Vector2(1.08, 1.08) if i == ci else Vector2.ONE
 
 
 func _on_pick_skill(s: int) -> void:
-	if gs.phase == Rules.Phase.SKILL_PICK and _view.you.pending_skill_pick == Rules.Skill.NONE:
-		_apply(Action.pick_skill(my_id, s))
+	if gs.phase != Rules.Phase.SKILL_PICK or _view.you.pending_skill_pick != Rules.Skill.NONE:
+		return
+	# 两段式：第一次点亮出说明（触屏没有 hover），再点同一门才确认
+	if _skill_sel != s:
+		_skill_sel = s
+		_skill_desc_label.text = "%s：%s　—— 再点一次确认" % [Rules.SKILL_NAMES[s], SKILL_DESCS[s]]
+		_skill_desc_label.modulate = Color(1.0, 0.88, 0.55)
+		for i in _skill_row_node.get_child_count():
+			var b: Button = _skill_row_node.get_child(i)
+			b.modulate = Color(1, 0.85, 0.4) if i == s else Color(1, 1, 1)
+		return
+	_apply(Action.pick_skill(my_id, s))
 
 
 func _on_skill_hover(s: int) -> void:
+	if _skill_sel == s:
+		return          # 已选中的保持"再点一次确认"提示
 	_skill_desc_label.text = "%s：%s" % [Rules.SKILL_NAMES[s], SKILL_DESCS[s]]
+	_skill_desc_label.modulate = Color(0.85, 0.82, 0.7)
 
 
 func _on_emote(i: int) -> void:
@@ -1170,12 +1306,14 @@ func _refresh() -> void:
 		_suit_card.visible = false
 	elif _view.round_number <= 0 or _view.current_suit < 0:
 		_suit_label.text = "路数 ——"
+		_suit_label.modulate = Color(1, 1, 1)
 		_suit_card.visible = false
 	elif true:
 		var changed := ""
 		if _view.suit_changed_by != -1:
 			changed = "（%s 改弦）" % _names[_view.suit_changed_by]
 		_suit_label.text = "本轮论【%s】%s" % [Rules.SUIT_NAMES[_view.current_suit], changed]
+		_suit_label.modulate = _suit_ui_color(_view.current_suit)
 		var tex: Texture2D = Art.card_tex(_view.current_suit)
 		_suit_card.visible = tex != null
 		if tex != null:
@@ -1246,7 +1384,9 @@ func _refresh() -> void:
 		# 按钮态
 		var is_human_turn: bool = gs.phase == Rules.Phase.PLAY \
 			and int(_view.current_player) == my_id and _view.you.hand.size() > 0
-		_play_button.disabled = not is_human_turn or _hand_panel.selected_indices().size() < 1
+		var sel_n: int = _hand_panel.selected_indices().size()
+		_play_button.text = "出招 ×%d" % sel_n if sel_n > 0 else "出招"
+		_play_button.disabled = not is_human_turn or sel_n < 1
 		_challenge_button.disabled = not (is_human_turn and _has_type(_view.legal_actions, "CHALLENGE"))
 		var sk: int = _view.you.skill
 		var can_skill := is_human_turn and _has_skill_action(_view.legal_actions)
@@ -1271,14 +1411,29 @@ func _refresh() -> void:
 		picking = gs.phase == Rules.Phase.SKILL_PICK \
 			and _view.you.pending_skill_pick == Rules.Skill.NONE and _view.you.alive
 	_skill_row_node.visible = game_mode < Rules.Mode.ANQI
+	_skill_hint_label.visible = game_mode < Rules.Mode.ANQI
 	_ready_btn.visible = game_mode >= Rules.Mode.ANQI
 	_skill_desc_label.visible = game_mode < Rules.Mode.ANQI
+	if picking and not _skill_modal.visible:
+		# 弹窗打开上升沿：清掉上一局残留的预选（联机 rematch 不走首开分支）
+		_skill_sel = -1
+		_skill_sent = false
+		for b in _skill_row_node.get_children():
+			b.modulate = Color(1, 1, 1)
 	_set_modal(_skill_modal, picking)
+	# 报门户期间舞台旁白与弹层内容重叠，隐掉（弹层就是全部信息）
+	_narration.visible = not picking
+	_claim_label.visible = not picking
 	if picking:
 		if game_mode >= Rules.Mode.ANQI:
 			_skill_pick_label.text = "选个皮囊，准备上桌（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
 		else:
 			_skill_pick_label.text = "报门户 —— 选一门技能（剩 %d 秒）" % int(maxf(_skill_pick_left, 0.0))
+			# 预选兜底：只点了一次没确认、倒计时将尽 → 按预选提交。
+			# 联机下超时由服务端随机收尾，必须抢在它前面把预选发出去。
+			if _skill_sel >= 0 and not _skill_sent and _skill_pick_left <= 2.0:
+				_skill_sent = true
+				_apply(Action.pick_skill(my_id, _skill_sel))
 	var swap_open: bool = gs.phase == Rules.Phase.SWAP_WINDOW \
 		and _view.you.alive and _view.you.skill == Rules.Skill.GAIXIAN and _view.you.skill_uses_left > 0
 	_set_modal(_swap_modal, swap_open)
@@ -1302,6 +1457,14 @@ func _refresh() -> void:
 			_restart_button.disabled = false
 
 
+func _suit_ui_color(suit: int) -> Color:
+	match suit:
+		Rules.Suit.DAO: return Color(1.0, 0.62, 0.52)
+		Rules.Suit.JIAN: return Color(0.62, 0.8, 1.0)
+		Rules.Suit.ZHANG: return Color(0.6, 1.0, 0.72)
+	return Color(1, 0.88, 0.55)
+
+
 func _mk_stage_card(tex: Texture2D, suit: int) -> Control:
 	var box := Control.new()
 	box.custom_minimum_size = Vector2(96, 144)
@@ -1312,6 +1475,11 @@ func _mk_stage_card(tex: Texture2D, suit: int) -> Control:
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		box.add_child(tr)
+		if game_mode < Rules.Mode.ANQI:
+			# 花色角标（暗器/递毒的舞台贴图不是花色牌）
+			var chip := Art.suit_chip(suit)
+			if chip != null:
+				box.add_child(chip)
 	else:
 		var rect := ColorRect.new()
 		rect.color = Color("#3A3F4A") if suit < 0 else Color("#C9A54F")
@@ -1486,6 +1654,10 @@ func _build_lobby() -> void:
 		var mb := Button.new()
 		mb.text = Rules.MODE_NAMES[mi]
 		mb.focus_mode = Control.FOCUS_NONE
+		var lmic := Art.mode_icon_tex(mi)
+		if lmic != null:
+			mb.icon = lmic
+			mb.add_theme_constant_override("icon_max_width", 20)
 		mb.pressed.connect(_on_lobby_mode.bind(mi))
 		lm_row.add_child(mb)
 		_lobby_mode_btns.append(mb)
@@ -1627,10 +1799,18 @@ func _on_net_game(m: Dictionary) -> void:
 		_game_started_online = true
 		my_id = net.my_seat
 		game_mode = int(net.lobby.get("game_mode", 0)) if not net.lobby.is_empty() else 0
+		if _bg_rect != null:
+			_bg_rect.texture = Art.bg_tex(game_mode)
 		_hand_panel.tex_override = Art.poison_texes() if game_mode == Rules.Mode.DIDU else []
 		_hand_panel.max_select = 1 if game_mode == Rules.Mode.DIDU else Rules.MAX_PLAY_CARDS
 		_ready_btn.text = "准备"
 		_ready_btn.disabled = false
+		_skill_sel = -1
+		_skill_sent = false
+		for b in _skill_row_node.get_children():
+			b.modulate = Color(1, 1, 1)
+		_skill_desc_label.text = "点一门技能查看说明，再点一次确认；技能可与他人重复"
+		_skill_desc_label.modulate = Color(0.85, 0.82, 0.7)
 		gs = _rgame
 		_intro_modal.visible = false
 		_lobby_modal.visible = false
@@ -1937,6 +2117,8 @@ func _on_mode_pick(mi: int) -> void:
 	game_mode = mi
 	for i in _mode_btns.size():
 		_mode_btns[i].modulate = Color(1, 0.85, 0.4) if i == mi else Color(1, 1, 1)
+	if _bg_rect != null:
+		_bg_rect.texture = Art.bg_tex(mi)
 	var d := _intro_modal.find_child("ModeDesc", true, false)
 	if d != null:
 		d.text = Rules.MODE_DESCS[mi]
@@ -2000,6 +2182,15 @@ func _build_dice_zone(parent: HBoxContainer) -> void:
 	parent.add_child(_dice_zone)
 	parent.move_child(_dice_zone, 2)
 
+	var cup := Art.dice_cup_tex()
+	if cup != null:
+		var cupr := TextureRect.new()
+		cupr.texture = cup
+		cupr.custom_minimum_size = Vector2(56, 56)
+		cupr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		cupr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_dice_zone.add_child(cupr)
+
 	_dice_row = HBoxContainer.new()
 	_dice_row.add_theme_constant_override("separation", 6)
 	_dice_zone.add_child(_dice_row)
@@ -2033,6 +2224,10 @@ func _build_dice_zone(parent: HBoxContainer) -> void:
 		var fb := Button.new()
 		fb.text = Rules.DICE_FACE_NAMES[f]
 		fb.focus_mode = Control.FOCUS_NONE
+		var ftex := Art.dice_tex(f)
+		if ftex != null:
+			fb.icon = ftex
+			fb.add_theme_constant_override("icon_max_width", 20)
 		fb.pressed.connect(_set_dice_face.bind(f))
 		frow.add_child(fb)
 		_dice_face_btns.append(fb)
@@ -2130,7 +2325,7 @@ func _refresh_poison_targets(exclude_seen: bool) -> void:
 		if exclude_seen and seen.has(qid):
 			continue
 		var tb := Button.new()
-		tb.text = "递给 " + str(p.name)
+		tb.text = "→" + str(p.name)
 		tb.focus_mode = Control.FOCUS_NONE
 		tb.set_meta("pid", qid)
 		tb.pressed.connect(_set_poison_target.bind(qid))
@@ -2172,12 +2367,15 @@ func _refresh_stage_lunzhao() -> void:
 	if not _reveal_cards.is_empty():
 		sig = "R%s|%d" % [str(_reveal_cards), _reveal_pid]
 		_claim_label.text = "%s 的招亮出真章 —— %s" % [_names[_reveal_pid], "句句是真" if _reveal_honest else "虚招被识破！"]
+		_claim_label.modulate = Color(0.68, 1.0, 0.72) if _reveal_honest else Color(1.0, 0.42, 0.34)
 	elif _view.last_played_count > 0 and _view.last_player_who_played >= 0:
 		sig = "B%d|%d" % [_view.last_played_count, _view.last_player_who_played]
 		_claim_label.text = "%s 押下 %d 式，声称皆是【%s】" % [
 			_names[_view.last_player_who_played], _view.last_played_count, Rules.SUIT_NAMES[_view.current_suit]]
+		_claim_label.modulate = Color(1, 0.88, 0.55)
 	else:
 		_claim_label.text = "本轮尚未有人出招" if gs.phase == Rules.Phase.PLAY else ""
+		_claim_label.modulate = Color(1, 0.88, 0.55)
 	if sig != _stage_sig:
 		_stage_sig = sig
 		for c in _stage_cards.get_children():
@@ -2255,8 +2453,14 @@ func _refresh_bottom_dice() -> void:
 		for c in _dice_row.get_children():
 			c.free()
 		for d in mine:
+			# 浅色底片：深色骰面图标在夜景背景上看不清（这是自己的私有信息，必须醒目）
+			var chip := PanelContainer.new()
+			var csb := _flat_style(Color(0.82, 0.76, 0.62, 0.92), 8, 4, 4)
+			csb.border_color = Color(0.4, 0.33, 0.2)
+			csb.set_border_width_all(1)
+			chip.add_theme_stylebox_override("panel", csb)
 			var tr := TextureRect.new()
-			tr.custom_minimum_size = Vector2(52, 52)
+			tr.custom_minimum_size = Vector2(44, 44)
 			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			var tex: Texture2D = Art.dice_tex(int(d))
@@ -2267,7 +2471,8 @@ func _refresh_bottom_dice() -> void:
 				lb.text = Rules.DICE_FACE_NAMES[int(d)]
 				lb.add_theme_font_size_override("font_size", 13)
 				tr.add_child(lb)
-			_dice_row.add_child(tr)
+			chip.add_child(tr)
+			_dice_row.add_child(chip)
 	var my_turn: bool = gs.phase == Rules.Phase.PLAY and int(_view.current_player) == my_id
 	_play_button.text = "叫价"
 	_play_button.visible = true

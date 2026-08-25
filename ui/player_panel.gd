@@ -358,6 +358,9 @@ func set_data(d: Dictionary, is_me: bool, is_current: bool) -> void:
 	_own_timer_label.visible = own >= 0
 	if own >= 0:
 		_own_timer_label.text = "剩 %d 秒" % own
+		var urgent := own <= 5
+		_own_timer_label.add_theme_font_size_override("font_size", 15 if urgent else 12)
+		_own_timer_label.modulate = Color(1.0, 0.38, 0.3) if urgent else Color(0.6, 0.9, 1.0)
 
 	modulate = Color(0.4, 0.4, 0.4) if not d.alive else Color(1, 1, 1)
 

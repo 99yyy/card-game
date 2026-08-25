@@ -12,6 +12,7 @@ const CARD_SIZE := Vector2(128, 192)   # 64x96 素材 2x 整数放大，像素�
 var _hand: Array = []
 var _selected: Dictionary = {}
 var _boxes: Array = []
+var _frames_sel: Array = []      # 选中金框（每张牌一个，随牌面一起上浮）
 var _hovered := -1
 var _prev_count := 0        # 只有牌变多（新发牌）才播飞入动画，出牌后不重播
 var tex_override: Array = []      # 递毒模式：五毒牌面（下标=毒物种类）
@@ -35,7 +36,14 @@ func _rebuild(deal_anim := false) -> void:
 	for c in get_children():
 		c.free()
 	_boxes = []
-	var cs := CARD_SIZE if _hand.size() <= 6 else Vector2(84, 126)   # 递毒 10+ 张时缩小防溢出
+	_frames_sel = []
+	# 递毒大手牌逐档缩小：10 张时 84 宽仍会把右侧应答按钮挤出屏幕
+	var cs := CARD_SIZE
+	if _hand.size() > 8:
+		cs = Vector2(64, 96)
+	elif _hand.size() > 6:
+		cs = Vector2(84, 126)
+	add_theme_constant_override("separation", 4 if _hand.size() > 8 else 10)
 	for i in _hand.size():
 		var btn := Button.new()
 		btn.custom_minimum_size = cs
@@ -47,8 +55,21 @@ func _rebuild(deal_anim := false) -> void:
 		btn.mouse_exited.connect(_on_hover.bind(i, false))
 		var face := _card_visual(_hand[i])
 		btn.add_child(face)
+		# 选中金框：描边叠加层，跟着 face 一起动
+		var frame := Panel.new()
+		var fsb := StyleBoxFlat.new()
+		fsb.bg_color = Color(1, 0.85, 0.4, 0.10)
+		fsb.border_color = Color(1.0, 0.83, 0.35)
+		fsb.set_border_width_all(3)
+		fsb.set_corner_radius_all(6)
+		frame.add_theme_stylebox_override("panel", fsb)
+		frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+		frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		frame.visible = false
+		face.add_child(frame)
 		add_child(btn)
 		_boxes.append(btn)
+		_frames_sel.append(frame)
 		if deal_anim:
 			# 发牌飞入：从下方错峰浮起
 			face.position.y = 52
@@ -71,7 +92,7 @@ func _animate_card(idx: int) -> void:
 	var face: Control = b.get_child(0)
 	var target := 0.0
 	if _selected.has(idx):
-		target = -18.0
+		target = -26.0
 	elif _hovered == idx:
 		target = -10.0
 	var tw := face.create_tween()
@@ -90,6 +111,11 @@ func _card_visual(suit: int) -> Control:
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if tex_override.is_empty():
+			# 花色角标（递毒的毒物牌不适用：suit 含义不同）
+			var chip := Art.suit_chip(suit)
+			if chip != null:
+				tr.add_child(chip)
 		return tr
 	# fallback：文字色块
 	var rect := ColorRect.new()
@@ -130,9 +156,18 @@ func _on_toggle(idx: int) -> void:
 	selection_changed.emit(selected_indices())
 
 func _update_selection_visual() -> void:
+	var any := not _selected.is_empty()
 	for i in _boxes.size():
 		var b: Button = _boxes[i]
-		b.modulate = Color(1.15, 1.12, 1.0) if _selected.has(i) else Color(1, 1, 1)
+		var sel := _selected.has(i)
+		if sel:
+			b.modulate = Color(1.12, 1.08, 1.0)
+		elif any:
+			b.modulate = Color(0.62, 0.62, 0.68)   # 有选择时压暗未选牌，选中一目了然
+		else:
+			b.modulate = Color(1, 1, 1)
+		if i < _frames_sel.size():
+			_frames_sel[i].visible = sel
 		_animate_card(i)
 
 func selected_indices() -> Array:

@@ -64,9 +64,14 @@ async function runMode(mode) {
   const gm = st.lobby?.game_mode;
   ws.send(JSON.stringify({ t: "start" }));
   const t0 = Date.now();
-  while (!st.over && Date.now() - t0 < 240000) {
+  let lastLog = 0;
+  while (!st.over && Date.now() - t0 < 660000) {
     await new Promise(r => setTimeout(r, 400));
     act();
+    if (Date.now() - lastLog > 30000) {
+      lastLog = Date.now();
+      console.log(`  [mode=${mode}] t=${((Date.now()-t0)/1000)|0}s phase=${st.view?.phase} round=${st.view?.round_number} alive=${st.view?.alive_count}`);
+    }
   }
   ws.close();
   const leak = JSON.stringify(st.view || {});
